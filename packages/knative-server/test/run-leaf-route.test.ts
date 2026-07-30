@@ -45,6 +45,20 @@ describe("POST /runs", () => {
     expect(r.json).toEqual({ status: "done", verdict: { item_id: "i1", verdict: "CLEAR", reason: "ok" } });
     expect(runLeaf).toHaveBeenCalledOnce();
   });
+
+  it("does not accept a sandbox selector from the run request", async () => {
+    runLeaf.mockResolvedValue({ status: "done", verdict: { item_id: "i1", verdict: "CLEAR", reason: "ok" } });
+    await post("/runs", {
+      sessionId: "run/i1",
+      sandboxPoolSelector: "attacker.example/pool=other",
+      item: { item_id: "i1", file: "f", pattern: "p" },
+    });
+
+    expect(runLeaf).toHaveBeenCalledWith(
+      expect.not.objectContaining({ sandboxPoolSelector: expect.anything() }),
+      expect.any(Object),
+    );
+  });
 });
 
 // Spec §4.3: the sync path must bound-wait with backoff on pool saturation, then 503 Retry-After.

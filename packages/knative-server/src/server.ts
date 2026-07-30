@@ -207,6 +207,9 @@ function handler(req: IncomingMessage, res: ServerResponse): void {
       const raw = await readBody(req);
       let parsed: any = {};
       try { parsed = JSON.parse(raw); } catch { /* handled below */ }
+      // Pool selection is internal routing state. Never accept a Kubernetes selector directly
+      // from an external run request; a workload resolver may add one after this boundary.
+      if (parsed && typeof parsed === "object") delete parsed.sandboxPoolSelector;
       if (parsed && parsed.async === true) return handleEnqueueLeafParsed(parsed, res);
       return handleRunLeafParsed(parsed, raw, res);
     };

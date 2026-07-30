@@ -58,6 +58,8 @@ export interface LeafItem { item_id: string; file: string; pattern: string; requ
 
 export interface LeafEnvelope {
   sessionId: string;
+  /** Pool selected by the workload-facing control plane; falls back to the process default. */
+  sandboxPoolSelector?: string;
   item: LeafItem;             // inputs inline (was inputsRef)
   decision?: Decision;        // resume/approve only (was decisionRef)
   model?: string;
@@ -71,6 +73,12 @@ export interface LeafEnvelope {
   kind?: "converge" | "solve"; // absent/"converge" => existing behavior; "solve" => runSolveLeaf
   problemStatement?: string;   // required when kind === "solve": the task the agent must implement
   env_key?: string;            // swebench solve: triggers the contained swebench-setup path (Plan C)
+}
+
+/** Apply a request-scoped pool selector without mutating the process-wide environment. */
+function sandboxEnvironment(env: LeafEnvelope): NodeJS.ProcessEnv {
+  if (!env.sandboxPoolSelector) return process.env;
+  return { ...process.env, KAGENTI_SANDBOX_POOL_SELECTOR: env.sandboxPoolSelector };
 }
 
 /** The Pi/Redis session id for a leaf: tenant-prefixed (if any), then sanitized. */
@@ -241,7 +249,7 @@ export const realProduceSolve: ProduceSolve = async (env, config, capture) => {
 
   // A solve leaf MUST have a real sandbox worktree — fail fast (before any Redis/session work) if the
   // pool is unconfigured. selectPoolSandbox returns null when no sandbox is configured (see select-sandbox.ts).
-  const selected = await selectPoolSandbox(process.env, cwd, sid, {
+  const selected = await selectPoolSandbox(sandboxEnvironment(env), cwd, sid, {
     cap: Number(process.env.KAGENTI_SANDBOX_CAP ?? "20"),
     ttlMs: Number(process.env.KAGENTI_SANDBOX_LEASE_TTL_MS ?? "60000"),
   });
@@ -382,7 +390,7 @@ export const realProduceVerdict: ProduceVerdict = async (item, env, config, capt
   // verdict fast-path so a recovered verdict does not lease a pod. Returns null ⇒ no sandbox
   // configured (local tools). Throws SandboxPoolSaturatedError when a configured pool is full.
   const remoteSandbox = process.env.SH_REMOTE_SANDBOX === "1";
-  const selected = await selectPoolSandbox(process.env, cwd, sid, {
+  const selected = await selectPoolSandbox(sandboxEnvironment(env), cwd, sid, {
     cap: Number(process.env.KAGENTI_SANDBOX_CAP ?? "20"),
     ttlMs: Number(process.env.KAGENTI_SANDBOX_LEASE_TTL_MS ?? "60000"),
     remoteSandbox,

@@ -224,6 +224,27 @@ describe("realProduceVerdict transport wiring (Task 9)", () => {
     expect(k8sSandboxExtensionMock).toHaveBeenCalledWith({ config: FAKE_CONFIG, transport: undefined });
   });
 
+  it("uses a request-scoped sandbox pool selector", async () => {
+    selectPoolSandboxMock.mockReset().mockResolvedValue({
+      config: FAKE_CONFIG,
+      heartbeat: vi.fn(async () => {}),
+      release: vi.fn(async () => {}),
+    });
+
+    await runLeaf({
+      sessionId: "run/workload-1",
+      sandboxPoolSelector: "sh.kagenti.io/sandbox-pool=workload-1",
+      item: { item_id: "i1", file: "f", pattern: "p" },
+    });
+
+    expect(selectPoolSandboxMock).toHaveBeenCalledWith(
+      expect.objectContaining({ KAGENTI_SANDBOX_POOL_SELECTOR: "sh.kagenti.io/sandbox-pool=workload-1" }),
+      expect.any(String),
+      expect.any(String),
+      expect.any(Object),
+    );
+  });
+
   it("grpc path: reuses selected.transport for converge + cleanup and closes it exactly once", async () => {
     const close = vi.fn(async () => {});
     const transport = {
