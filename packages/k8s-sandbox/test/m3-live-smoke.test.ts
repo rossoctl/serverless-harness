@@ -24,7 +24,12 @@ const LIVE = !!process.env.M3_LIVE_SMOKE;
 const cfg: K8sSandboxConfig = {
   pod: process.env.KAGENTI_SANDBOX_POD ?? '',
   namespace: process.env.KAGENTI_SANDBOX_NAMESPACE ?? 'default',
-  context: process.env.KAGENTI_SANDBOX_CONTEXT ?? 'kind-kagenti',
+  // Unset => undefined => kubectl's current-context, matching what config.ts and
+  // resolve-pod.ts already do with this variable and what the README documents as the
+  // default. The old `?? 'kind-kagenti'` literal pinned one developer's cluster name, so on
+  // any other cluster the suite failed against a context that does not exist rather than
+  // running where the operator was already pointed (#192).
+  context: process.env.KAGENTI_SANDBOX_CONTEXT || undefined,
   podCwd: '/workspace',
   headCwd: '/head',
 };

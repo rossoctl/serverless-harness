@@ -1,5 +1,9 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { OUTPUT_TRUNCATED_MARKER, type SandboxTransport } from '../src/transport.js';
+import {
+  DEFAULT_EXEC_TIMEOUT_S,
+  OUTPUT_TRUNCATED_MARKER,
+  type SandboxTransport,
+} from '../src/transport.js';
 
 /**
  * A scripted sandbox backend, transport-agnostic. Each transport's conformance
@@ -158,6 +162,39 @@ export function runConformance(
       const assertion = expect(p).rejects.toThrow('timeout:2');
       await vi.advanceTimersByTimeAsync(2000);
       await assertion;
+    });
+
+    // The default was pinned by nothing, so the three transports had silently diverged:
+    // two armed no timer at all and the third used 120 s (#182). Whatever the value is,
+    // every transport must apply the SAME one, or an exec's fate depends on which
+    // transport served it -- something no caller above the seam can see.
+    it('applies DEFAULT_EXEC_TIMEOUT_S when the caller names no timeout', async () => {
+      vi.useFakeTimers();
+      const { transport } = make({ hang: true });
+      const p = transport.exec('sleep 999');
+      const assertion = expect(p).rejects.toThrow(`timeout:${DEFAULT_EXEC_TIMEOUT_S}`);
+      // Just short of the ceiling it must still be pending: a transport that timed out
+      // early (or armed 120 s) would pass a bare "eventually rejects" check.
+      await vi.advanceTimersByTimeAsync(DEFAULT_EXEC_TIMEOUT_S * 1000 - 1000);
+      let settled = false;
+      void p.catch(() => {}).finally(() => (settled = true));
+      await Promise.resolve();
+      expect(settled, 'rejected before the default ceiling elapsed').toBe(false);
+      await vi.advanceTimersByTimeAsync(1000);
+      await assertion;
+    });
+
+    it('arms no timer at all for an explicit timeout: 0', async () => {
+      vi.useFakeTimers();
+      const { transport } = make({ hang: true });
+      const p = transport.exec('sleep 999', { timeout: 0 });
+      let settled = false;
+      void p.catch(() => {}).finally(() => (settled = true));
+      // Well past the default ceiling: an opt-out that quietly fell back to it would
+      // reject here.
+      await vi.advanceTimersByTimeAsync(DEFAULT_EXEC_TIMEOUT_S * 2 * 1000);
+      await Promise.resolve();
+      expect(settled, 'timeout: 0 must mean no timeout, not the default').toBe(false);
     });
 
     it("rejects with 'aborted' when the signal fires", async () => {

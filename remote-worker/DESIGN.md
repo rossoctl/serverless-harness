@@ -192,8 +192,10 @@ outside-the-cluster (`RELAY_TLS=1`, Route host) cases.
 - `run-local.sh` — laptop setup (relay token, enable path, port-forward, run).
 - `build-image.sh` — cross-compile linux/amd64 + package via OpenShift internal-registry
   binary build (or `--push <ref>` for an external registry).
-- `deploy-incluster.sh` — create SA + `nonroot-v2` SCC, apply the Deployment, verify presence.
-- `worker-deployment.yaml` — in-cluster Deployment template (filled by `deploy-incluster.sh`).
+- `deploy-incluster.sh` — create the shared relay-token Secret, SA + `nonroot-v2` SCC, apply
+  the Deployment, verify presence.
+- `worker-deployment.yaml` — in-cluster Deployment template (filled by `deploy-incluster.sh`;
+  the token is not substituted in, it is read from the `sh-relay-token` Secret).
 - `Dockerfile` — multi-stage build from repo root (builds Go in-cluster).
 - `Dockerfile.runtime` — packages the prebuilt binary (used by `build-image.sh`).
 

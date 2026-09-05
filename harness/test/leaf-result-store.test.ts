@@ -144,6 +144,8 @@ describe('writeResult / readResult', () => {
       reason: null,
       patch: null,
       text: null,
+      usage: null, // required on LeafResultRecord; omitted here until #190, so the
+      // round-trip assertion below never actually covered it
       sessionId: 'run-1/i1',
       ts: 'T',
     };

@@ -394,6 +394,44 @@ else
   fi
 fi
 
+# ----------------------------------------------------------------------------
+# 3b. Relay bearer token (sh-relay-token).
+# ----------------------------------------------------------------------------
+# The OCP overlay patches the relay's SH_RELAY_TOKEN to a secretKeyRef on this Secret
+# (overlays/ocp/patch-relay-token.yaml, #173), so the overlay this script applies below
+# HARD-REQUIRES it: without the Secret the relay pod never starts
+# (CreateContainerConfigError), and since nothing here does `rollout status` on the relay,
+# that failure would be silent and harder to diagnose than the token mismatch the patch
+# exists to avoid.
+#
+# Generated, not `dev-token`: the whole point of the patch is that an OCP relay must not
+# carry the repo's public dev credential. Supply SH_RELAY_TOKEN to pin a specific value --
+# a worker must present exactly this token, and remote-worker/deploy-incluster.sh reads it
+# back out of this same Secret.
+#
+# Never overwritten when already present. A re-run of this script must not rotate a token
+# out from under a worker that is already attached with it; that is also why the overlay
+# does not use a kustomize secretGenerator, which would clobber it on every apply.
+gen_relay_token() {
+  local t
+  t="$(openssl rand -hex 16 2>/dev/null || true)"
+  [ -n "$t" ] || t="$(head -c 16 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n' || true)"
+  [ -n "$t" ] || die "could not generate a relay token (no openssl, and /dev/urandom is not readable). Set SH_RELAY_TOKEN to supply one."
+  printf '%s' "$t"
+}
+
+if $KUBECTL get secret sh-relay-token -n "$NAMESPACE" &>/dev/null; then
+  log_success "Secret sh-relay-token already present in $NAMESPACE — keeping it (not rotating)"
+elif $DRY_RUN; then
+  log_info "[dry-run] would create secret sh-relay-token in $NAMESPACE (value redacted)"
+else
+  $KUBECTL create secret generic sh-relay-token -n "$NAMESPACE" \
+    --from-literal=SH_RELAY_TOKEN="${SH_RELAY_TOKEN:-$(gen_relay_token)}" \
+    --dry-run=client -o yaml | $KUBECTL apply -f - >/dev/null
+  log_success "Secret sh-relay-token ready in $NAMESPACE (relay auth is fail-closed)"
+  log_info "Give a worker the same token: oc get secret sh-relay-token -n $NAMESPACE -o jsonpath='{.data.SH_RELAY_TOKEN}' | base64 -d"
+fi
+
 # ============================================================================
 # 4. Grant the harness ServiceAccount an SCC that permits its non-root UID.
 # ============================================================================

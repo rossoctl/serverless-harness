@@ -42,3 +42,7 @@ patches:
       group: agents.x-k8s.io
       version: v1beta1
       kind: Sandbox
+
+  # The base's SH_RELAY_TOKEN literal is a Kind dev value; on OCP it would be a real
+  # credential in the Deployment spec. See patch-relay-token.yaml (#173).
+  - path: patch-relay-token.yaml

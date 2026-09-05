@@ -23,6 +23,20 @@ function fakeQueue(
       touched.push(id);
     },
     pending: async () => 0,
+    // processOne drives none of these three -- the consumer lifecycle lives in
+    // knative-server/src/leaf-job.ts -- but WorkQueue requires them, and they were missing
+    // from this fake until harness/test came under the typechecker (#190). Throwing rather
+    // than no-op: if processOne ever does reach one, that should fail here loudly instead of
+    // quietly succeeding against a stub that does nothing.
+    deleteConsumer: async () => {
+      throw new Error('fakeQueue.deleteConsumer: not exercised by processOne');
+    },
+    gcIdleConsumers: async () => {
+      throw new Error('fakeQueue.gcIdleConsumers: not exercised by processOne');
+    },
+    reapDeadLetters: async () => {
+      throw new Error('fakeQueue.reapDeadLetters: not exercised by processOne');
+    },
     purge: async () => {},
     close: async () => {},
   };

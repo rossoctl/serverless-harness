@@ -28,8 +28,19 @@ spec:
               value: __SANDBOX_ID__
             - name: RELAY_ADDR
               value: sandbox-relay.__NS__.svc:8443
+            # Sourced from a Secret, never substituted in: a literal here put the live token
+            # into the Deployment spec, `oc describe`, and any GitOps mirror of this
+            # namespace (#173). deploy-incluster.sh creates the Secret.
+            #
+            # The key is SH_RELAY_TOKEN rather than SANDBOX_TOKEN on purpose. This value must
+            # equal the relay's SH_RELAY_TOKEN -- auth is fail-closed, so a mismatch rejects
+            # every Attach -- and both sides reading one key makes that equality structural
+            # instead of something a test has to compare.
             - name: SANDBOX_TOKEN
-              value: __TOKEN__
+              valueFrom:
+                secretKeyRef:
+                  name: sh-relay-token
+                  key: SH_RELAY_TOKEN
           securityContext:
             runAsNonRoot: true
             runAsUser: 1001 # matches the image's USER 1001; nonroot-v2 SCC allows it

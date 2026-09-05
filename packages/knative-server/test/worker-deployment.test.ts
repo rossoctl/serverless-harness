@@ -89,10 +89,43 @@ describe('remote-worker/worker-deployment.yaml (the sed-filled gate template)', 
   it('keeps every placeholder deploy-incluster.sh substitutes', () => {
     const raw = readFileSync(resolve(WORKER, 'worker-deployment.yaml'), 'utf8');
     // deploy-incluster.sh seds these by exact string; a rename here fails silently and
-    // ships a pod with a literal __IMAGE__ reference.
-    for (const p of ['__NS__', '__IMAGE__', '__SANDBOX_ID__', '__TOKEN__']) {
+    // ships a pod with a literal __IMAGE__ reference. __TOKEN__ is deliberately absent --
+    // the token arrives by secretKeyRef now (#173), which the next test pins.
+    for (const p of ['__NS__', '__IMAGE__', '__SANDBOX_ID__']) {
       expect(raw, `${p} is substituted by remote-worker/deploy-incluster.sh`).toContain(p);
     }
+  });
+
+  it('takes SANDBOX_TOKEN from the Secret deploy-incluster.sh creates, never as a literal', () => {
+    // A `value: __TOKEN__` sed put the live token into the Deployment spec, `oc describe` and
+    // any GitOps mirror of the namespace. The two halves of this -- the manifest's reference
+    // and the script's Secret -- are in different files and different languages, so nothing
+    // but a check like this keeps them agreeing.
+    const tokenEnv = envOf(template()).find((e) => e.name === 'SANDBOX_TOKEN');
+    expect(
+      tokenEnv,
+      'SANDBOX_TOKEN is read at startup by remote-worker/cmd/worker/main.go',
+    ).toBeDefined();
+    expect(
+      tokenEnv!.value,
+      'a literal value here is the leak #173 is about -- it persists in the Deployment spec',
+    ).toBeUndefined();
+
+    const ref = (tokenEnv as { valueFrom?: { secretKeyRef?: { name?: string; key?: string } } })
+      .valueFrom?.secretKeyRef;
+    expect(ref, 'SANDBOX_TOKEN must arrive via secretKeyRef').toBeDefined();
+
+    const script = readFileSync(resolve(WORKER, 'deploy-incluster.sh'), 'utf8');
+    const name = /^SECRET_NAME="([^"]+)"$/m.exec(script);
+    const key = /^SECRET_KEY="([^"]+)"$/m.exec(script);
+    if (!name || !key) {
+      throw new Error(
+        'could not find SECRET_NAME= / SECRET_KEY= in deploy-incluster.sh -- renamed? This ' +
+          'check cannot compare what it cannot extract.',
+      );
+    }
+    expect(ref!.name, 'must match the Secret deploy-incluster.sh creates').toBe(name[1]);
+    expect(ref!.key, 'must match the key deploy-incluster.sh puts the token under').toBe(key[1]);
   });
 
   it('sets a memory limit that covers the worst-case buffering of whichever concurrency actually runs', () => {

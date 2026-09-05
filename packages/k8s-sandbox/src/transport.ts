@@ -74,3 +74,32 @@ export const DEFAULT_OUTPUT_CAP = 8 * 1024 * 1024; // 8 MiB
 
 /** Appended to returned stdout when the cap trips, so Pi sees the truncation. */
 export const OUTPUT_TRUNCATED_MARKER = '\n[output truncated]';
+
+/**
+ * Ceiling on one exec when the caller names no `timeout` (spec §3; issue #182). Shared by
+ * ALL THREE implementations, for the same reason DEFAULT_OUTPUT_CAP is: an exec that
+ * behaves differently depending on which transport happened to serve it is a divergence
+ * the caller above the seam cannot see or control.
+ *
+ * The three used to disagree. `KubectlTransport` and `persistentExecInPod` armed no timer
+ * at all, so a command with no timeout ran unbounded; `GrpcRelayTransport` applied 120 s.
+ * Pi's bash tool declares `timeout` optional and tells the model there is "no default
+ * timeout", so omitting it is the ordinary case, not an edge one — the same model-issued
+ * `bash` ran forever on a pod and died after two minutes through a relay.
+ *
+ * This is deliberately generous. It exists to stop an exec leaking a slot forever, NOT to
+ * police how long a command may legitimately take: a cold `npm ci`, a full test suite or a
+ * container build can all outrun a two-minute budget, and the relay's 120 s default was low
+ * enough to fail those on the remote path only. Callers that know better still pass their
+ * own `timeout`, and `timeout: 0` explicitly opts out (the ceiling applies only when the
+ * option is absent).
+ *
+ * `GrpcRelayTransport` also sends this as the request's `timeout_s`, so the worker holds the
+ * same budget independently. It is the only transport whose process is remote: the other two
+ * time out a child in their own process, which cannot outlive the timer, whereas a harness
+ * that exits mid-exec would otherwise leave a remote process with nothing left to stop it.
+ *
+ * Pinned for every implementation by test/conformance.ts (and, for the wire value,
+ * test/grpc-relay-transport.test.ts), so none can drift back.
+ */
+export const DEFAULT_EXEC_TIMEOUT_S = 30 * 60; // 30 minutes

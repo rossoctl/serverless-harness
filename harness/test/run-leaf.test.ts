@@ -22,9 +22,13 @@ vi.mock('../src/select-sandbox.js', () => ({
   SandboxPoolSaturatedError: FakeSandboxPoolSaturatedError,
 }));
 
+// The `(..._args: unknown[])` params are load-bearing, not decoration: the vi.mock factories
+// below forward their arguments with a spread, and a mock whose implementation declares no
+// parameters is typed as taking none -- so neither the forwarding call nor the `call[0]`
+// assertions further down would typecheck.
 const { k8sSandboxExtensionMock, kubectlTransportMock } = vi.hoisted(() => ({
-  k8sSandboxExtensionMock: vi.fn(() => () => {}),
-  kubectlTransportMock: vi.fn(() => ({
+  k8sSandboxExtensionMock: vi.fn((..._args: unknown[]) => () => {}),
+  kubectlTransportMock: vi.fn((..._args: unknown[]) => ({
     exec: vi.fn(async () => ({ stdout: Buffer.from(''), exitCode: 0, truncated: false })),
     close: vi.fn(async () => {}),
   })),
@@ -73,7 +77,9 @@ const { FakeSessionManager, FakeResourceLoader, createAgentSessionMock } = vi.ho
   return {
     FakeSessionManager,
     FakeResourceLoader,
-    createAgentSessionMock: vi.fn(async () => ({ session: { prompt: async () => {} } })),
+    createAgentSessionMock: vi.fn(async (..._args: unknown[]) => ({
+      session: { prompt: async () => {} },
+    })),
   };
 });
 vi.mock('@earendil-works/pi-coding-agent', () => ({
@@ -533,23 +539,25 @@ it('solve without env_key uses convergeWorkspace, not swebench setup', async () 
   // produceSolve is injectable; assert the swebench branch is NOT taken when env_key is absent.
   // (Structural: import isSwebenchEnvelope and check the predicate.)
   const { isSwebenchEnvelope } = await import('../src/run-leaf.js');
-  expect(
-    isSwebenchEnvelope({
-      kind: 'solve',
-      problemStatement: 'x',
-      repoUrl: 'git://h/r.git',
-      ref: 'main',
-    }),
-  ).toBe(false);
-  expect(
-    isSwebenchEnvelope({
-      kind: 'solve',
-      problemStatement: 'x',
-      repoUrl: '/repos/a/b.git',
-      ref: 'c',
-      env_key: 'k:latest',
-    }),
-  ).toBe(true);
+  // isSwebenchEnvelope's parameter is the narrow structural subset it actually reads
+  // ({ kind, env_key }), so these otherwise-realistic solve envelopes are excess properties
+  // when handed to it as fresh literals. Typing them as Partial<LeafEnvelope> keeps the
+  // realism -- and still catches a misspelled field -- without that clash.
+  const noEnvKey: Partial<LeafEnvelope> = {
+    kind: 'solve',
+    problemStatement: 'x',
+    repoUrl: 'git://h/r.git',
+    ref: 'main',
+  };
+  const withEnvKey: Partial<LeafEnvelope> = {
+    kind: 'solve',
+    problemStatement: 'x',
+    repoUrl: '/repos/a/b.git',
+    ref: 'c',
+    env_key: 'k:latest',
+  };
+  expect(isSwebenchEnvelope(noEnvKey)).toBe(false);
+  expect(isSwebenchEnvelope(withEnvKey)).toBe(true);
 });
 
 describe('runPromptLeaf sandbox leasing', () => {

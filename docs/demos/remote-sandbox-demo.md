@@ -133,6 +133,12 @@ kubectl -n $NS rollout status deploy/sandbox-relay --timeout=90s
 > because that value is a repo constant and therefore public. Patch _before_ waiting on the
 > rollout, so the pod that becomes Ready is already the one holding this token.
 
+> **Kind only.** This demo applies `relay-deployment.yaml` directly, so `set env` is the right
+> tool here. On an OCP overlay deployment the relay reads `SH_RELAY_TOKEN` from the
+> `sh-relay-token` Secret instead, and `set env` would replace that `secretKeyRef` with a
+> literal — putting the token back into the Deployment spec, which is what #173 removed. There,
+> rotate the Secret and `oc rollout restart deploy/sandbox-relay`.
+
 ### 1c. Open the tunnel — and prove the relay is really serving
 
 ```bash

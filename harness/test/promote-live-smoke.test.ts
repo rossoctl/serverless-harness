@@ -18,7 +18,11 @@ const LIVE =
   !!process.env.KAGENTI_SANDBOX_POOL_SELECTOR;
 
 const FIXTURES = join(__dirname, 'fixtures', 'promoted');
-const clients: Array<ReturnType<typeof createClient>> = [];
+// Typed by the one method the teardown below uses, in the spirit of RedisLike /
+// BundleRedisLike elsewhere in this package. `ReturnType<typeof createClient>` looks tighter
+// but is not: createClient() and createClient({ url }) resolve to differently-parameterized
+// RedisClientTypes, so pushing the latter into an array of the former does not typecheck.
+const clients: Array<{ quit(): Promise<unknown> }> = [];
 
 afterAll(async () => {
   for (const c of clients) await c.quit();

@@ -1,7 +1,11 @@
 import { type ChildProcess, spawn as nodeSpawn } from 'node:child_process';
 import type { K8sSandboxConfig } from './config.js';
 import type { ExecInPod, SandboxTransport } from './transport.js';
-import { DEFAULT_OUTPUT_CAP, OUTPUT_TRUNCATED_MARKER } from './transport.js';
+import {
+  DEFAULT_EXEC_TIMEOUT_S,
+  DEFAULT_OUTPUT_CAP,
+  OUTPUT_TRUNCATED_MARKER,
+} from './transport.js';
 import { CAP_STAGE_FAILED, FrameParser, wrapCommand } from './framing.js';
 
 /** argv for the long-lived session: a bare interactive `bash` (NOT `bash -c`). */
@@ -174,10 +178,12 @@ export function persistentExecInPod(
         }
         if (opts.signal?.aborted) return killAndReject(new Error('aborted'));
         opts.signal?.addEventListener('abort', onAbort, { once: true });
-        if (opts.timeout && opts.timeout > 0) {
+        // Absent => the shared ceiling (#182); an explicit 0 still means "no timeout at all".
+        const timeoutS = opts.timeout ?? DEFAULT_EXEC_TIMEOUT_S;
+        if (timeoutS > 0) {
           timer = setTimeout(
-            () => killAndReject(new Error(`timeout:${opts.timeout}`)),
-            opts.timeout * 1000,
+            () => killAndReject(new Error(`timeout:${timeoutS}`)),
+            timeoutS * 1000,
           );
         }
         inflight = {

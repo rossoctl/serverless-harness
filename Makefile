@@ -19,12 +19,13 @@ test:
 test-deploy:
 	@set -e; for t in deploy/knative/tests/*.test.sh deploy/claude/tests/*.test.sh; do echo "== $$t"; bash "$$t"; done
 
+# One recursive run, so this target and CI cannot drift apart by editing a list in one of
+# them -- which they had, in both directions (#191): config-bundle was checked only here,
+# sandbox-relay and ibac-stub only in CI. The package set is now whichever packages declare
+# a `typecheck` script, and harness/test/typecheck-coverage.test.ts asserts they all do
+# (`pnpm -r` skips a package that does not, silently, and still exits 0).
 typecheck:
-	cd harness && pnpm exec tsc --noEmit
-	cd packages/k8s-sandbox && pnpm exec tsc --noEmit
-	cd packages/knative-server && pnpm exec tsc --noEmit
-	cd packages/config-bundle && pnpm exec tsc --noEmit
-	cd experiments && pnpm exec tsc --noEmit
+	pnpm -r typecheck
 
 # Laptop showcase: harness on kind, remote worker as a host container dialing out.
 # See deploy/knative/README-worker.md. Add --reuse-cluster to skip setup on a warm cluster.

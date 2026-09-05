@@ -1,7 +1,11 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import type { K8sSandboxConfig } from './config.js';
 import type { ExecInPod, SandboxTransport } from './transport.js';
-import { DEFAULT_OUTPUT_CAP, OUTPUT_TRUNCATED_MARKER } from './transport.js';
+import {
+  DEFAULT_EXEC_TIMEOUT_S,
+  DEFAULT_OUTPUT_CAP,
+  OUTPUT_TRUNCATED_MARKER,
+} from './transport.js';
 
 // Re-export so existing `./exec.js` importers of ExecInPod keep working.
 export type { ExecInPod, ExecResult } from './transport.js';
@@ -47,12 +51,14 @@ export function KubectlTransport(
       const out: Buffer[] = [];
       let timedOut = false;
       let settled = false;
+      // Absent => the shared ceiling (#182); an explicit 0 still means "no timeout at all".
+      const timeoutS = opts.timeout ?? DEFAULT_EXEC_TIMEOUT_S;
       const timer =
-        opts.timeout && opts.timeout > 0
+        timeoutS > 0
           ? setTimeout(() => {
               timedOut = true;
               child.kill('SIGKILL');
-            }, opts.timeout * 1000)
+            }, timeoutS * 1000)
           : undefined;
 
       let bytes = 0;
@@ -94,7 +100,7 @@ export function KubectlTransport(
         if (opts.signal?.aborted) return reject(new Error('aborted'));
         if (truncated)
           return resolve({ stdout: Buffer.concat(out), exitCode: null, truncated: true });
-        if (timedOut) return reject(new Error(`timeout:${opts.timeout}`));
+        if (timedOut) return reject(new Error(`timeout:${timeoutS}`));
         if (shouldEmitExecTiming(process.env)) {
           process.stderr.write(formatExecTiming(config.pod, Date.now() - startMs, command));
         }

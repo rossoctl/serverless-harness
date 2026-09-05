@@ -11,8 +11,17 @@ describe('resolveTurnSandbox', () => {
       exec: async () => ({ stdout: Buffer.from(''), exitCode: 0, truncated: false }),
       close: async () => {},
     };
+    // `context` is a required key on K8sSandboxConfig (its value may be undefined, meaning
+    // "use current-context"), so a config literal that omits it is not one -- unnoticed until
+    // harness/test came under the typechecker (#190).
     const injected = {
-      config: { pod: 'sbx-laptop', namespace: 'default', podCwd: '/workspace', headCwd: '/head' },
+      config: {
+        pod: 'sbx-laptop',
+        namespace: 'default',
+        context: undefined,
+        podCwd: '/workspace',
+        headCwd: '/head',
+      },
       transport,
     };
 
@@ -26,7 +35,13 @@ describe('resolveTurnSandbox', () => {
     // A leased remote sandbox must win over an ambient KAGENTI_SANDBOX_POD: honouring the env
     // here would silently route a remote prompt leaf back to an in-cluster pod.
     const injected = {
-      config: { pod: 'sbx-leased', namespace: 'default', podCwd: '/workspace', headCwd: '/head' },
+      config: {
+        pod: 'sbx-leased',
+        namespace: 'default',
+        context: undefined,
+        podCwd: '/workspace',
+        headCwd: '/head',
+      },
     };
 
     const got = await resolveTurnSandbox(injected, { KAGENTI_SANDBOX_POD: 'sandbox-0' }, '/head');

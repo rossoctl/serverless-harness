@@ -19,9 +19,12 @@ vi.mock('../src/select-sandbox.js', () => ({
   SandboxPoolSaturatedError: FakeSandboxPoolSaturatedError,
 }));
 
+// The `(..._args: unknown[])` params are load-bearing, not decoration: the vi.mock factories
+// below forward their arguments with a spread, and a mock whose implementation declares no
+// parameters is typed as taking none — so the forwarding call does not typecheck.
 const { k8sSandboxExtensionMock, kubectlTransportMock } = vi.hoisted(() => ({
-  k8sSandboxExtensionMock: vi.fn(() => () => {}),
-  kubectlTransportMock: vi.fn(() => ({
+  k8sSandboxExtensionMock: vi.fn((..._args: unknown[]) => () => {}),
+  kubectlTransportMock: vi.fn((..._args: unknown[]) => ({
     exec: vi.fn(async () => ({ stdout: Buffer.from(''), exitCode: 0, truncated: false })),
     close: vi.fn(async () => {}),
   })),
@@ -31,7 +34,26 @@ vi.mock('@sh/k8s-sandbox', () => ({
   KubectlTransport: (...args: unknown[]) => kubectlTransportMock(...args),
 }));
 
-import { runLeaf, type LeafEnvelope } from '../src/run-leaf.js';
+import { runLeaf, type LeafEnvelope, type LeafResult } from '../src/run-leaf.js';
+
+/** The real `executeTurn` contract, so the fake below cannot drift from what runLeaf calls. */
+type ExecuteTurnDep = NonNullable<NonNullable<Parameters<typeof runLeaf>[2]>['executeTurn']>;
+
+/**
+ * Assert a LeafResult's status AND narrow it to that union member.
+ *
+ * `expect(r.status).toBe('failed')` asserts at runtime but tells tsc nothing, so the
+ * `r.reason` / `r.message` reads that followed it were themselves unchecked until
+ * harness/test came under the typechecker (#190). The cast is sound because the
+ * expectation above it throws first on any other status.
+ */
+function expectStatus<S extends LeafResult['status']>(
+  r: LeafResult,
+  status: S,
+): Extract<LeafResult, { status: S }> {
+  expect(r.status).toBe(status);
+  return r as Extract<LeafResult, { status: S }>;
+}
 
 const FAKE_CONFIG = { podName: 'sbx-0', namespace: 'team1' } as never;
 /** A pod-shaped lease: config present, transport ABSENT — the default deployment. */
@@ -62,8 +84,11 @@ const fakePromoted = {
   entries: [{ path: 'skills/k/SKILL.md', content: Buffer.from('b') }],
 };
 
+// Typed as the real dep rather than inferred: that is what makes `.mock.calls[0][0]` the
+// actual ExecuteTurnInput below, so the promotedConfig assertions are checked against the
+// contract instead of against whatever shape this fake happens to have.
 const okTurn = () =>
-  vi.fn(async () => ({
+  vi.fn<ExecuteTurnDep>(async () => ({
     sessionId: 'run-1-i1',
     response: 'text',
     stopReason: 'end_turn',
@@ -105,9 +130,9 @@ describe('configRef on a prompt leaf', () => {
       overlayConfig: vi.fn(),
       bundleRedis: {} as never,
     });
-    expect(r.status).toBe('failed');
-    expect(r.reason).toBe('error');
-    expect(r.message).toContain('configRef');
+    const failed = expectStatus(r, 'failed');
+    expect(failed.reason).toBe('error');
+    expect(failed.message).toContain('configRef');
     // Never run the turn unconfigured, and never spend a resolve on an empty digest.
     expect(executeTurn).not.toHaveBeenCalled();
     expect(resolvePromotedConfig).not.toHaveBeenCalled();
@@ -186,9 +211,9 @@ describe('configRef on a prompt leaf', () => {
       // redis connection, and the resolve/overlay stubs below would never be what fails.
       bundleRedis: {} as never,
     });
-    expect(r.status).toBe('failed');
-    expect(r.reason).toBe('error');
-    expect(r.message).toContain(digest);
+    const failed = expectStatus(r, 'failed');
+    expect(failed.reason).toBe('error');
+    expect(failed.message).toContain(digest);
     // It must NOT have run the turn unconfigured.
     expect(executeTurn).not.toHaveBeenCalled();
   });
@@ -211,14 +236,16 @@ describe('configRef on a prompt leaf', () => {
       bundleRedis: {} as never,
     });
     expect(overlayConfig).toHaveBeenCalledTimes(1);
-    const fragments = executeTurn.mock.calls[0]![0].promotedConfig.promptFragments;
-    expect(fragments.some((f: string) => f.includes('/.sh-config/skills'))).toBe(true);
+    // promotedConfig is optional on ExecuteTurnInput, so assert it arrived before reading
+    // through it: "the overlay ran but passed nothing on" is the failure this test is for,
+    // and it would otherwise surface as a TypeError rather than a clean expectation.
+    const promoted = executeTurn.mock.calls[0]![0].promotedConfig;
+    expect(promoted).toBeDefined();
+    expect(promoted!.promptFragments.some((f) => f.includes('/.sh-config/skills'))).toBe(true);
     // Issue #222 (2): the overlay's path is also what the skill registry must advertise, so the
     // one path the model is handed for a skill is the one `read` can reach. Without this the
     // prompt names the pod-side /tmp/sh-config/<digest> copy, which is dead in the sandbox.
-    expect(executeTurn.mock.calls[0]![0].promotedConfig.sandboxSkillsDir).toBe(
-      '/workspace/leaves/run-1-i1/.sh-config/skills',
-    );
+    expect(promoted!.sandboxSkillsDir).toBe('/workspace/leaves/run-1-i1/.sh-config/skills');
     // Pin the fallback itself, not just that the overlay ran: with a transport-less (pod) lease,
     // the code must genuinely build a KubectlTransport for the overlay call, and — since it built
     // one rather than reusing a leased one — must close it afterward. A second KubectlTransport is
@@ -346,8 +373,7 @@ describe('configRef on a prompt leaf', () => {
       // redis connection, and the resolve/overlay stubs below would never be what fails.
       bundleRedis: {} as never,
     });
-    expect(r.status).toBe('failed');
-    expect(r.reason).toBe('error');
+    expect(expectStatus(r, 'failed').reason).toBe('error');
     expect(executeTurn).not.toHaveBeenCalled();
     // Both fallback transports built on this path must be closed: the overlay's own (created inside
     // the try, torn down by its local `finally`) and the release's (created in the leaf-level

@@ -13,8 +13,9 @@ describe.skipIf(!live)('RedisLeaseStore (live redis)', () => {
     let now = 1_000_000;
     const store = new RedisLeaseStore(url, () => now);
     try {
-      // Fresh key.
-      // @ts-expect-error reach the raw client for test cleanup only
+      // Fresh key. Bracket access reaches the private client for test cleanup only -- TS
+      // permits that deliberately, so this needs no @ts-expect-error (it carried one until
+      // #190, which tsc then reported as unused once harness/test was checked).
       await store['client'].del(leaseKey(pod));
 
       expect(await store.acquire(pod, 2, 'a', 1000)).toBe(true);

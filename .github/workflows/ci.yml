@@ -56,14 +56,10 @@ jobs:
       - name: Install workspace
         run: pnpm install --frozen-lockfile
 
+      # Same recursive run as `make typecheck`, so the two cannot drift apart by editing a
+      # list in one of them. See the Makefile target for why that matters (#191).
       - name: Typecheck
-        run: |
-          cd harness && pnpm exec tsc --noEmit && cd ..
-          cd packages/k8s-sandbox && pnpm exec tsc --noEmit && cd ../..
-          cd packages/knative-server && pnpm exec tsc --noEmit && cd ../..
-          cd packages/sandbox-relay && pnpm exec tsc --noEmit && cd ../..
-          cd packages/ibac-stub && pnpm exec tsc --noEmit && cd ../..
-          cd experiments && pnpm exec tsc --noEmit && cd ..
+        run: pnpm -r typecheck
 
       - name: Test
         run: pnpm -r test

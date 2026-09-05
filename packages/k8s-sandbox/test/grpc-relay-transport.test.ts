@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { runConformance, type FakeBehavior, type TransportFactory } from './conformance.js';
 import { GrpcRelayTransport, type ExecClientLike } from '../src/grpc-relay-transport.js';
+import { DEFAULT_EXEC_TIMEOUT_S } from '../src/transport.js';
 import {
   Stream,
   type AbortRequest,
@@ -78,10 +79,12 @@ function manualClient() {
   // GrpcRelayTransport hands to exec() so assertions can compare against the
   // real id instead of guessing it.
   let lastReqId: number | undefined;
+  let lastTimeoutS: number | undefined;
   const aborted: number[] = [];
   const client = {
-    exec(request?: { exec?: { reqId: number } }) {
+    exec(request?: { exec?: { reqId: number; timeoutS?: number } }) {
       lastReqId = request?.exec?.reqId;
+      lastTimeoutS = request?.exec?.timeoutS;
       stream = Object.assign(new EventEmitter(), { cancel: () => {} });
       return stream;
     },
@@ -96,10 +99,38 @@ function manualClient() {
     emit: (ev: ExecEvent) => stream.emit('data', ev),
     aborted: () => aborted,
     reqId: () => lastReqId,
+    timeoutS: () => lastTimeoutS,
   };
 }
 
 describe('GrpcRelayTransport extra semantics', () => {
+  // The shared battery pins what the CALLER observes, which cannot distinguish a ceiling both
+  // ends enforce from one only we do. These three pin the wire value, because the difference
+  // only shows up when the harness is no longer around to enforce its own timer: the worker
+  // arms a timeout solely when timeout_s > 0 (remote-worker/internal/exec/runner.go), so a 0
+  // here means a dropped connection or a dead harness leaves the remote process running
+  // forever -- the slot leak DEFAULT_EXEC_TIMEOUT_S exists to prevent (#182).
+  it('sends the shared ceiling as timeout_s when the caller names no timeout', async () => {
+    const { client, timeoutS } = manualClient();
+    const t = GrpcRelayTransport('sbx-1', client as never);
+    void t.exec('sleep 999').catch(() => {});
+    expect(timeoutS()).toBe(DEFAULT_EXEC_TIMEOUT_S);
+  });
+
+  it("sends the caller's own timeout_s verbatim when one is given", async () => {
+    const { client, timeoutS } = manualClient();
+    const t = GrpcRelayTransport('sbx-1', client as never);
+    void t.exec('sleep 999', { timeout: 7 }).catch(() => {});
+    expect(timeoutS()).toBe(7);
+  });
+
+  it('sends 0 for an explicit timeout: 0, so unbounded stays unbounded on both ends', async () => {
+    const { client, timeoutS } = manualClient();
+    const t = GrpcRelayTransport('sbx-1', client as never);
+    void t.exec('sleep 999', { timeout: 0 }).catch(() => {});
+    expect(timeoutS()).toBe(0);
+  });
+
   it("the cap's Abort names the exec's own req_id", async () => {
     // The shared battery only asks "was the producer stopped". Here we pin the wire
     // detail the battery cannot express portably: the relay routes an Abort by req_id,

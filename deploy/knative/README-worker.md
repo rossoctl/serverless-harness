@@ -60,6 +60,19 @@ the relay Deployment:
 oc set env deploy/sandbox-relay SH_RELAY_TOKEN=dev-token -n default
 ```
 
+> **Not on an OCP overlay deployment.** `setup-ocp.sh` deploys the relay through
+> `overlays/ocp`, which reads `SH_RELAY_TOKEN` from the `sh-relay-token` Secret so the
+> token never sits in the Deployment spec (#173). `oc set env` replaces the whole env
+> entry rather than merging into it, so the command above would swap that `secretKeyRef`
+> back for a literal — putting a live token into the spec. Rotate the Secret instead, and
+> restart the relay so it re-reads it (env from a Secret is resolved only at pod start):
+>
+> ```bash
+> oc create secret generic sh-relay-token -n default \
+>   --from-literal=SH_RELAY_TOKEN=<token> --dry-run=client -o yaml | oc apply -f -
+> oc rollout restart deploy/sandbox-relay -n default
+> ```
+
 Use a per-sandbox token instead if you want each worker to authenticate
 separately — `SH_RELAY_TOKEN_<SANDBOX_ID>` takes precedence over the global
 `SH_RELAY_TOKEN` for that sandbox id:
@@ -398,10 +411,10 @@ fiddly; start in-cluster and graduate only if you need external reachability.
 
 ## Troubleshooting
 
-| Symptom                                                 | Cause / fix                                                                                                                                                                  |
-| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Worker connects but the Attach is immediately closed    | Token unset or mismatched. Set `SH_RELAY_TOKEN` on the relay (Step 1) and give the worker the same value as `SANDBOX_TOKEN`. Auth is fail-closed.                            |
-| No field in `sh:sandbox:records`                        | The Attach never succeeded (see above), the worker isn't sending `authorization: Bearer <token>` metadata, or it isn't sending `Hello` with `sandbox_id` as the first frame. |
-| Presence is there but the harness never uses the worker | `SH_REMOTE_SANDBOX` / `SH_RELAY_ADDR` not set on the harness ksvc (Step 2). Confirm with `oc set env ksvc/serverless-harness --list -n default`.                             |
-| A second worker for the same id won't connect           | Expected — one live Attach per `SANDBOX_ID`. Give each worker a distinct id.                                                                                                 |
-| `exit_code` comes back `null`                           | The child was signalled (or the worker sent `exit_code < 0`). Not an error by itself.                                                                                        |
+| Symptom                                                 | Cause / fix                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Worker connects but the Attach is immediately closed    | Token unset or mismatched. Set `SH_RELAY_TOKEN` on the relay (Step 1) and give the worker the same value as `SANDBOX_TOKEN`. Auth is fail-closed. On an OCP overlay deployment, rotate the `sh-relay-token` Secret and `oc rollout restart deploy/sandbox-relay` instead of using `oc set env` — see the note in Step 1. |
+| No field in `sh:sandbox:records`                        | The Attach never succeeded (see above), the worker isn't sending `authorization: Bearer <token>` metadata, or it isn't sending `Hello` with `sandbox_id` as the first frame.                                                                                                                                             |
+| Presence is there but the harness never uses the worker | `SH_REMOTE_SANDBOX` / `SH_RELAY_ADDR` not set on the harness ksvc (Step 2). Confirm with `oc set env ksvc/serverless-harness --list -n default`.                                                                                                                                                                         |
+| A second worker for the same id won't connect           | Expected — one live Attach per `SANDBOX_ID`. Give each worker a distinct id.                                                                                                                                                                                                                                             |
+| `exit_code` comes back `null`                           | The child was signalled (or the worker sent `exit_code < 0`). Not an error by itself.                                                                                                                                                                                                                                    |

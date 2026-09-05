@@ -42,6 +42,16 @@ class FakeStore implements LogStore<FileEntry> {
   async nextPosition(): Promise<number> {
     return this.rows.length + 1;
   }
+  // BufferedRedisBackend never calls this, but LogStore requires it and checkpoint-extension.ts
+  // uses it against the real store -- so the fake implements it the same way rather than
+  // narrowing what it claims to be. It was missing entirely until harness/test came under the
+  // typechecker (#190).
+  async positionOfId(_sid: string, id: string): Promise<number | null> {
+    for (const r of this.rows) {
+      if ((r.entry as { id?: unknown } | null)?.id === id) return r.position;
+    }
+    return null;
+  }
   async list(): Promise<string[]> {
     return ['s'];
   }
