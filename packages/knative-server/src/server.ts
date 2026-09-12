@@ -569,7 +569,7 @@ function warnDeprecatedRoute(oldPath: string): void {
   );
 }
 
-function handler(req: IncomingMessage, res: ServerResponse): void {
+export function handler(req: IncomingMessage, res: ServerResponse): void {
   const url = req.url ?? '';
 
   if (req.method === 'GET' && url === '/health') {

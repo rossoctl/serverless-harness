@@ -3,6 +3,7 @@ import {
   orderByLoad,
   selectPoolSandbox,
   SandboxPoolSaturatedError,
+  resolveDiscoverySource,
 } from '../src/select-sandbox.js';
 import type { LeaseStore } from '../src/sandbox-lease.js';
 import type { RecordStore, SandboxRecord } from '../src/pool-records.js';
@@ -213,5 +214,108 @@ describe('selectPoolSandbox remote dispatch: ad-hoc RedisRecordStore lifecycle',
     // Caller owns the injected store's lifecycle: we must never construct our
     // own (and therefore never call .close on anything the caller didn't hand us).
     expect(createdRecordStores).toHaveLength(0);
+  });
+});
+
+describe('resolveDiscoverySource', () => {
+  it('defaults to both when SH_SANDBOX_DISCOVERY is unset or blank', () => {
+    expect(resolveDiscoverySource({} as NodeJS.ProcessEnv, false)).toBe('both');
+    expect(
+      resolveDiscoverySource({ SH_SANDBOX_DISCOVERY: '   ' } as NodeJS.ProcessEnv, false),
+    ).toBe('both');
+  });
+
+  it('accepts pods|records|both and trims whitespace', () => {
+    expect(
+      resolveDiscoverySource({ SH_SANDBOX_DISCOVERY: ' pods ' } as NodeJS.ProcessEnv, false),
+    ).toBe('pods');
+    expect(
+      resolveDiscoverySource({ SH_SANDBOX_DISCOVERY: 'records' } as NodeJS.ProcessEnv, true),
+    ).toBe('records');
+    expect(
+      resolveDiscoverySource({ SH_SANDBOX_DISCOVERY: 'both' } as NodeJS.ProcessEnv, true),
+    ).toBe('both');
+  });
+
+  it('rejects an unknown value naming the variable and the legal set', () => {
+    expect(() =>
+      resolveDiscoverySource({ SH_SANDBOX_DISCOVERY: 'grpc' } as NodeJS.ProcessEnv, true),
+    ).toThrow(/SH_SANDBOX_DISCOVERY='grpc' is not one of pods\|records\|both/);
+  });
+
+  it('records without the remote flag fails loudly naming SH_REMOTE_SANDBOX', () => {
+    // Falling through would surface "no Running pods for pool selector '…'", which blames
+    // the pool for what is a flag mistake. Blame the flag.
+    expect(() =>
+      resolveDiscoverySource({ SH_SANDBOX_DISCOVERY: 'records' } as NodeJS.ProcessEnv, false),
+    ).toThrow(/SH_REMOTE_SANDBOX=1/);
+  });
+});
+
+describe('selectPoolSandbox discovery source', () => {
+  const env = (extra: Record<string, string> = {}) =>
+    ({ KAGENTI_SANDBOX_POOL_SELECTOR: 'app=sbx', ...extra }) as NodeJS.ProcessEnv;
+
+  it('REGRESSION PIN: unset ⇒ pods are listed exactly as before', async () => {
+    // The "changed nothing" gate. If this breaks, the seam is not inert.
+    const listPods = vi.fn(async () => ['sandbox-0-0']);
+    const lease = fakeLease({ 'sandbox-0-0': 0 }, 4);
+    const sel = await selectPoolSandbox(
+      env(),
+      '/head',
+      'run-1',
+      { cap: 4, ttlMs: 60000 },
+      { listPods, lease },
+    );
+    expect(listPods).toHaveBeenCalledTimes(1);
+    expect(sel?.config.pod).toBe('sandbox-0-0');
+  });
+
+  it('records: never shells out to kubectl, serves from mirrored records', async () => {
+    const listPods = vi.fn(async () => ['sandbox-0-0']);
+    const lease = fakeLease({ 'sbx-remote-1': 0 }, 4);
+    const sel = await selectPoolSandbox(
+      env({ SH_SANDBOX_DISCOVERY: 'records' }),
+      '/head',
+      'run-1',
+      { cap: 4, ttlMs: 60000, remoteSandbox: true },
+      { listPods, lease, records: fakeRecords([grpcRec]), makeExecClient: () => fakeExecClient },
+    );
+    // The whole point of step 0: no kubectl on a VM with no cluster.
+    expect(listPods).not.toHaveBeenCalled();
+    expect(sel?.config.pod).toBe('sbx-remote-1');
+    expect(sel?.transport).toBeDefined();
+  });
+
+  it('pods: ignores mirrored records even when the remote flag is on', async () => {
+    const list = vi.fn(async () => [grpcRec]);
+    const lease = fakeLease({ 'sandbox-0-0': 0 }, 4);
+    const sel = await selectPoolSandbox(
+      env({ SH_SANDBOX_DISCOVERY: 'pods' }),
+      '/head',
+      'run-1',
+      { cap: 4, ttlMs: 60000, remoteSandbox: true },
+      {
+        listPods: async () => ['sandbox-0-0'],
+        lease,
+        records: { put: async () => {}, remove: async () => {}, list },
+      },
+    );
+    expect(list).not.toHaveBeenCalled();
+    expect(sel?.transport).toBeUndefined();
+    expect(sel?.config.pod).toBe('sandbox-0-0');
+  });
+
+  it('records with an empty record set reports the pool, not a kubectl error', async () => {
+    const lease = fakeLease({}, 4);
+    await expect(
+      selectPoolSandbox(
+        env({ SH_SANDBOX_DISCOVERY: 'records' }),
+        '/head',
+        'run-1',
+        { cap: 4, ttlMs: 60000, remoteSandbox: true },
+        { listPods: async () => ['sandbox-0-0'], lease, records: fakeRecords([]) },
+      ),
+    ).rejects.toThrow("no Running pods for pool selector 'app=sbx'");
   });
 });

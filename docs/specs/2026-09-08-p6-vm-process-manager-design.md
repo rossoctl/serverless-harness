@@ -368,14 +368,29 @@ Go supervisor and a second language boundary around worker lifecycle and config.
 
 Named here so an implementer does not invent names, and so §7's tests have something to assert.
 
-| Variable                       | Default            | Meaning                                                 |
-| ------------------------------ | ------------------ | ------------------------------------------------------- |
-| `SH_WORKERS`                   | `os.cpus().length` | W — worker processes in the pool                        |
-| `SH_TURNS_PER_WORKER`          | _required_         | S — per-worker soft cap on **in-flight turns** (§3.5)   |
-| `SH_ROUTING_POLICY`            | `leastInFlight`    | `leastInFlight` \| `stickyBySession` (§3.4)             |
-| `SH_SANDBOX_DISCOVERY`         | see §4.2           | `pods` \| `records` \| `both`                           |
-| `SH_WORKER_RESTART_BACKOFF_MS` | `250`              | Base for exponential backoff on worker exit             |
-| `PORT`                         | `8080`             | Existing; the supervisor binds it instead of the server |
+| Variable                       | Default            | Meaning                                                       |
+| ------------------------------ | ------------------ | ------------------------------------------------------------- |
+| `SH_WORKERS`                   | `os.cpus().length` | W — worker processes in the pool                              |
+| `SH_TURNS_PER_WORKER`          | _required_         | S — per-worker soft cap on **in-flight turns** (§3.5)         |
+| `SH_ROUTING_POLICY`            | `leastInFlight`    | `leastInFlight` \| `stickyBySession` (§3.4)                   |
+| `SH_SANDBOX_DISCOVERY`         | see §4.2           | `pods` \| `records` \| `both`                                 |
+| `SH_WORKER_RESTART_BACKOFF_MS` | `250`              | Base for exponential backoff on worker exit                   |
+| `PORT`                         | `8080`             | Existing; the supervisor binds it instead of the server       |
+| `SH_ADMIN_PORT`                | `8081`             | `/metrics` listener, loopback only (§5.2); `0` ⇒ ephemeral    |
+| `SH_STATS_INTERVAL_MS`         | `1000`             | Worker advisory-telemetry interval (§5.2); read by the worker |
+
+**`SH_ADMIN_PORT` opens a listener whether or not you set it.** It defaults to `8081`, so a supervisor
+started with no admin configuration at all is still serving `/metrics` — on `127.0.0.1` only, and
+unauthenticated, which is why it is loopback-bound and why its body is an allowlist rather than the whole
+environment (§5.2). `readConfig` rejects a value equal to `PORT`, since two listeners on one port is an
+`EADDRINUSE` at boot in the best case; `0` is exempt, because the kernel hands out a distinct ephemeral
+port each time it is asked. It is deliberately **not** in `deploy/vm/env/supervisor.env.example`: the
+default is right for the single-VM target and an operator who does not need to move it should not have to
+think about it.
+
+`SH_STATS_INTERVAL_MS` is read by the **worker**, not the supervisor, so it reaches a worker through the
+inherited environment rather than through `readConfig`. It paces the advisory `stats` row only; nothing
+on the routing path is affected by it (§5.2).
 
 **S counts in-flight turns, not sessions — and the name says so.** Under the stateless default (§3.4)
 no worker owns a session between turns: the session lives in Redis and its next turn may land anywhere,

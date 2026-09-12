@@ -20,6 +20,36 @@ export function orderByLoad(loads: { pod: string; active: number }[]): string[] 
     .map((l) => l.pod);
 }
 
+/** Which sandbox inventories `selectPoolSandbox` consults. */
+export type DiscoverySource = 'pods' | 'records' | 'both';
+
+/**
+ * Resolve `SH_SANDBOX_DISCOVERY`. Unset ⇒ `both`, which is byte-for-byte today's behaviour
+ * (pods always listed; records only read when the remote flag is on).
+ *  - `pods`    — kubectl listing only; mirrored grpc records are ignored even with the flag on.
+ *  - `records` — mirrored grpc records only; never shells out to kubectl. This is what lets a
+ *                bare VM (no cluster, no kubeconfig) reach a relay-fronted sandbox.
+ *  - `both`    — the historical default.
+ */
+export function resolveDiscoverySource(
+  env: NodeJS.ProcessEnv,
+  remoteSandbox: boolean,
+): DiscoverySource {
+  const raw = env.SH_SANDBOX_DISCOVERY?.trim();
+  if (!raw) return 'both';
+  if (raw !== 'pods' && raw !== 'records' && raw !== 'both') {
+    throw new Error(`SH_SANDBOX_DISCOVERY='${raw}' is not one of pods|records|both`);
+  }
+  if (raw === 'records' && !remoteSandbox) {
+    // Blame the flag, not the pool: without this the caller sees "no Running pods for pool
+    // selector '…'", which sends them debugging a healthy pool.
+    throw new Error(
+      'SH_SANDBOX_DISCOVERY=records requires SH_REMOTE_SANDBOX=1 (records are only read when the remote flag is on)',
+    );
+  }
+  return raw;
+}
+
 /** Thrown when a pool is configured but every pod is at the soft cap. */
 export class SandboxPoolSaturatedError extends Error {
   constructor(selector: string) {
@@ -64,6 +94,7 @@ function defaultExecClient(_sandboxId: string, env: NodeJS.ProcessEnv): ExecClie
  *  - Pool configured ⇒ list Running pods (plus mirrored grpc records when `opts.remoteSandbox`
  *    is true), pick least-loaded under the soft cap, acquire a lease. Throws
  *    SandboxPoolSaturatedError if every candidate is full.
+ *  - `SH_SANDBOX_DISCOVERY` narrows which inventories are consulted (see resolveDiscoverySource).
  */
 export async function selectPoolSandbox(
   env: NodeJS.ProcessEnv,
@@ -84,11 +115,12 @@ export async function selectPoolSandbox(
   const list = deps.listPods ?? listPoolPods;
   const lease = deps.lease ?? new RedisLeaseStore(env.REDIS_URL);
 
-  const pods = await list(selector, namespace, context, deps.run);
+  const source = resolveDiscoverySource(env, opts.remoteSandbox === true);
+  const pods = source === 'records' ? [] : await list(selector, namespace, context, deps.run);
 
   // Inertness: when the flag is off, never construct a RedisRecordStore or call .list() —
   // the pod path must stay byte-for-byte identical to today (no extra Redis connection).
-  const remoteOn = opts.remoteSandbox === true;
+  const remoteOn = opts.remoteSandbox === true && source !== 'pods';
   let grpcRecs: SandboxRecord[] = [];
   if (remoteOn) {
     const injected = deps.records;

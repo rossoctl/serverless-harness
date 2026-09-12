@@ -1,0 +1,47 @@
+[Unit]
+Description=Serverless harness supervisor (P6 VM process manager)
+# Redis is a bare podman container started by start_redis() in setup-vm.sh, not a systemd
+# unit -- there is nothing here for Requires= to name. The client retries on connect, so
+# ordering against Redis is not load-bearing.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=harness
+Group=harness
+# Run from the supervisor's own package dir, matching the Knative precedent
+# (deploy/knative/relay-deployment.yaml, deploy/knative/control-plane.yaml): `node --import
+# tsx` resolves the tsx loader relative to the CWD, and tsx (a devDep) is linked only into
+# each package's own node_modules, never root-hoisted -- a CWD of the repo root crashes with
+# ERR_MODULE_NOT_FOUND 'tsx'. Do not "simplify" this back to the repo root.
+WorkingDirectory=/opt/serverless-harness/packages/supervisor
+EnvironmentFile=/etc/serverless-harness/supervisor.env
+ExecStart=/usr/bin/node --import tsx src/main.ts
+Restart=always
+RestartSec=2
+# The supervisor forks W workers; systemd must account for the whole tree.
+KillMode=control-group
+# §3.7: SIGTERM starts the drain. The deadline must exceed the longest turn E6 measured.
+TimeoutStopSec=120
+
+# §4.3 — the VM analogue of the pod securityContext. PRESENT, not equivalent: this narrows
+# the filesystem and syscall surface, and it is deliberately NOT claimed as parity in the
+# round-one report. What round one genuinely loses versus Kubernetes is NetworkPolicy egress
+# control (Z2/Z5 work), which has no systemd analogue at all.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+# systemd creates and owns /var/lib/serverless-harness for us; do not re-add a
+# ReadWritePaths= beside it -- that would name a path nothing creates.
+StateDirectory=serverless-harness
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+
+[Install]
+WantedBy=multi-user.target

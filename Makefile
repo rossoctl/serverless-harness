@@ -16,8 +16,9 @@ test:
 # mocked on PATH and only the call log is asserted. Run in CI by the `deploy-scripts` job.
 # `set -e` so one failing test file fails the target instead of being scrolled past.
 # deploy/claude/tests covers the /promote slash-command asset, which nothing else type-checks.
+# deploy/vm/tests covers setup-vm.sh, the single-VM systemd deployment (podman/systemctl mocked).
 test-deploy:
-	@set -e; for t in deploy/knative/tests/*.test.sh deploy/claude/tests/*.test.sh; do echo "== $$t"; bash "$$t"; done
+	@set -e; for t in deploy/knative/tests/*.test.sh deploy/claude/tests/*.test.sh deploy/vm/tests/*.test.sh; do echo "== $$t"; bash "$$t"; done
 
 # One recursive run, so this target and CI cannot drift apart by editing a list in one of
 # them -- which they had, in both directions (#191): config-bundle was checked only here,
