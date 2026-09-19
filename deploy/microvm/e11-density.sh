@@ -282,6 +282,26 @@ PROTO_FILE="$REPO_ROOT/proto/sandbox/v1/sandbox.proto"
 # failure.
 EXEC_MAX_TIME_S="${SH_E11_EXEC_MAX_TIME_S:-45}"      # guards timeout_s:30
 CONVERGE_MAX_TIME_S="${SH_E11_CONVERGE_MAX_TIME_S:-360}" # guards timeout_s:300
+
+# SH_E11_EXEC_CLIENT selects WHICH CLIENT issues the timed Execs (issue #294).
+#
+#   grpcurl - one grpcurl process per Exec. The reference path, and the default.
+#   go      - remote-worker/cmd/exec-driver: one process and ONE grpc.ClientConn for a whole
+#             rung, c goroutines in place of c subshells.
+#
+# Why this is opt-in rather than a replacement: measured on metal with the driver-control arm
+# (no relay, no Redis, no worker, no VMM), the grpcurl driver ALONE peaked at c=8 and then
+# declined, burning 64 of 72 cores at c=64 with its own p95 of 753ms -- the same knee position
+# and curve shape EXPERIMENTS.md published for both real arms. (That 753ms is PR #293's
+# repaired driver at ITERS_PER_SLOT=200; EXPERIMENTS.md's own published 1686ms is the pre-#291
+# driver at ITERS_PER_SLOT=20 -- different drivers at different counts, a mismatch that runs
+# in this finding's favor, not against it.) The Go client exists to remove that, but the
+# number that proves it must come from running BOTH against the null-responder on one host
+# with nothing else changed. Until that comparison exists, the bash path is the reference and
+# stays the default.
+EXEC_CLIENT="${SH_E11_EXEC_CLIENT:-grpcurl}"
+# Built once per run by build_exec_driver, beside the null-responder's binary.
+E11_EXEC_DRIVER_BIN="$RESULTS/.e11-exec-driver-bin"
 PROTO_IMPORT_PATH="$REPO_ROOT/proto"
 PROTO_REL_PATH="sandbox/v1/sandbox.proto"
 
@@ -433,6 +453,52 @@ validate_arms() {
   done
 }
 
+# validate_exec_client refuses any SH_E11_EXEC_CLIENT that is not one of the two real paths.
+# A typo must not fall through to a default: the value is stamped into every rung record as
+# execClient, and a ladder recorded under the wrong one would be compared against the wrong
+# table -- the same class of defect as a stale rung assembled into a fresh ladder.
+validate_exec_client() {
+  case "$EXEC_CLIENT" in
+  grpcurl | go) : ;;
+  *)
+    die "SH_E11_EXEC_CLIENT is '$EXEC_CLIENT', which is neither 'grpcurl' (one process per Exec, the reference path, the default) nor 'go' (remote-worker/cmd/exec-driver, one persistent connection per rung -- issue #294). Refusing to guess which was meant: the value is recorded as execClient in every rung, so guessing wrong mislabels a whole ladder."
+    ;;
+  esac
+}
+
+# exec_client_label prints the value stamped into each rung record as execClient. The record's
+# vocabulary is deliberately MORE descriptive than the env var's: "grpcurl" says which tool, and
+# "grpcurl-per-exec" says the thing that matters about it, which is one process per call.
+# Pure function of EXEC_CLIENT so the suite can drive both branches in isolation.
+exec_client_label() {
+  case "$EXEC_CLIENT" in
+  go) printf 'go-persistent-conn' ;;
+  *) printf 'grpcurl-per-exec' ;;
+  esac
+}
+
+# driver_control_note_for and exec_error_note_for print the two proxyLimitations disclosures whose
+# text DEPENDS on which client ran. Pure functions of their argument, like exec_client_label above,
+# so the suite can drive both paths in isolation -- the branch that chose between these strings used
+# to live inline in run_density_rung, where no test could reach it, and a swap between the two would
+# have made every go-driven record assert something false about its own trustworthiness.
+# Neither string may contain an apostrophe, a dollar sign, a backtick, or a backslash: both reach
+# the record writer's python3 -c "..." body through a DOUBLE-quoted bash string (below), so any of
+# those four would be expanded or reinterpreted by bash and/or python before the writer ever ran.
+driver_control_note_for() {
+  case "$1" in
+  go) printf '%s' "driver-control is a lower bound on driver-only cost on the Go path too, not a demonstrably tighter one: the Go client decodes the same ExecEvent stream on every arm via stream.Recv(), while grpcurl JSON-formats every received message even when it writes to /dev/null on this arm -- a real difference in decode cost, but as a fraction of the driver-only measurement its net effect on tightness is UNMEASURED (#294)." ;;
+  *) printf '%s' "driver-control is a STRICT LOWER BOUND on driver-only cost, not an exact one: the null-responder sends one End and no Chunk events, so grpcurl never decodes a chunk-carrying stream on this arm, while real Execs for mix commands that produce stdout do decode one or more Chunk events per call on the container/microvm arms. Subtracting driver-control latency therefore over-attributes some residue to the backend rather than the driver (#291 item 3)." ;;
+  esac
+}
+
+exec_error_note_for() {
+  case "$1" in
+  go) printf '%s' "an in-stream ExecEvent.error is recorded as status=err with its cause classified from the message. The grpcurl path records it as ok, because the relay yields that event and then returns a gRPC OK status. The two clients therefore DISAGREE on throughput, p95 and execErrorsByCause for any rung that produced ExecErrors on the container or microvm arms; they agree exactly on driver-control, where the null-responder never sends one (#294; the relay defect itself is issue #295)." ;;
+  *) printf '%s' "an in-stream ExecEvent.error is recorded as status=ok. The relay yields that event and then returns a gRPC OK status, so grpcurl exits 0: an ExecError-failed Exec counts toward throughput, enters the distribution p95 is taken over, and never reaches execErrorsByCause. Pre-existing on this path and fixed on the go path (#294; the relay defect itself is issue #295)." ;;
+  esac
+}
+
 # arm_in_use reports, via exit status, whether $1 is present in E11_ARMS, so preflight
 # can skip a tool or hardware check that no configured arm actually needs (issue #291
 # item 5): a SH_E11_ARMS=driver-control run should not be refused over a missing docker
@@ -462,6 +528,9 @@ preflight() {
   # an invented arm name must be refused before any of them run, not after (also see
   # arm_in_use above).
   validate_arms
+  # Before anything that depends on the value: build_exec_driver in main() reads it, and the
+  # record writer stamps it.
+  validate_exec_client
   # grpcurl and go are hard requirements for every arm: grpcurl drives every arm's Exec
   # RPCs, and go builds whichever binary that arm needs (./cmd/worker, ./cmd/microvm-worker,
   # or ./cmd/null-responder). Everything else in this function is conditional on which arms
@@ -1089,6 +1158,76 @@ escaped_mix() {
   done < <(e11_tool_call_mix)
 }
 
+# write_rung_plan emits ONE rung's instruction set for remote-worker/cmd/exec-driver
+# (issue #294), as JSON, at $1.
+#
+# A PURE FUNCTION OF ITS ARGUMENTS -- no globals read -- so the test suite can drive it in
+# isolation, the same property static_settings_json's comment claims for the same reason.
+#
+# Everything travels through ARGV, and python3's json.dumps does every escape. bash passes each
+# array element as one argv entry, so a workspace key or a path containing a space, quote,
+# backslash or tab cannot be mis-split -- which a delimited temp file could not promise. It also
+# keeps JSON escaping in the one place this driver already puts it (json_escape), rather than
+# adding a second, hand-rolled implementation in bash.
+#
+# The mix and the slot fields are VARIADIC, after a count of each, because bash cannot pass
+# arrays by value: the alternative was reading caller arrays by name, which would make this
+# untestable in isolation. Slot fields come in groups of four, in order:
+# reqBase workspaceKey timesFile errFile.
+#
+# Called BEFORE wall_t0 is stamped. Nothing in here may end up inside the timed window --
+# deploy/microvm/tests/e11-density.test.sh's fork guard asserts that python3 does not appear
+# between the two stamps.
+#
+# THE CLOSING BRACES AND BRACKETS IN THE PYTHON BODY BELOW ARE INDENTED ON PURPOSE. The test
+# suite extracts functions from this file by scanning for the closing bare `}` at column 0, and
+# it only knows to skip over an embedded `python3 -c "` block spelled with a DOUBLE quote (see
+# extract_fn). This block uses a single quote, so a `}` at column 0 here would terminate the
+# extraction early and the suite would source a truncated function. Python accepts an indented
+# closing delimiter, so this costs nothing; un-indenting it silently breaks two test sections.
+write_rung_plan() {
+  local out_path="$1" target="$2" sandbox_id="$3" iters="$4" warmup="$5" exec_timeout_s="$6" deadline_s="$7" mix_count="$8" slot_count="$9"
+  shift 9
+  python3 -c '
+import json, sys
+
+out, target, sandbox, iters, warmup, tmo, deadline, nmix, nslots = sys.argv[1:10]
+nmix, nslots = int(nmix), int(nslots)
+rest = sys.argv[10:]
+if len(rest) != nmix + 4 * nslots:
+    sys.stderr.write(
+        "e11: write_rung_plan was given %d variadic argument(s) but its counts say %d mix "
+        "command(s) plus 4 fields for each of %d slot(s) = %d. Refusing to write a plan that "
+        "would silently shrink the mix every slot loops over, or drop a slot.\n"
+        % (len(rest), nmix, nslots, nmix + 4 * nslots))
+    sys.exit(1)
+mix = rest[:nmix]
+fields = rest[nmix:]
+slots = [
+    {
+        "reqBase": int(fields[i * 4]),
+        "workspaceKey": fields[i * 4 + 1],
+        "timesFile": fields[i * 4 + 2],
+        "errFile": fields[i * 4 + 3],
+    }
+    for i in range(nslots)
+    ]
+plan = {
+    "target": target,
+    "sandboxId": sandbox,
+    "itersPerSlot": int(iters),
+    "warmupPerSlot": int(warmup),
+    "execTimeoutS": int(tmo),
+    "callDeadlineS": int(deadline),
+    "mix": mix,
+    "slots": slots,
+    }
+with open(out, "w") as fh:
+    json.dump(plan, fh, indent=2)
+' "$out_path" "$target" "$sandbox_id" "$iters" "$warmup" "$exec_timeout_s" "$deadline_s" "$mix_count" "$slot_count" "$@" ||
+    die "write_rung_plan could not write the rung plan to $out_path (its reason is above) - the Go Exec client has nothing to drive, so refusing to enter the timed window"
+}
+
 # ---------------------------------------------------------------------------
 # The Exec RPC itself, extended from e10-lifecycle.sh's grpc_exec_ms with a
 # workspace_key (proto/sandbox/v1/sandbox.proto: Exec.workspace_key, field 6,
@@ -1097,7 +1236,7 @@ escaped_mix() {
 # ---------------------------------------------------------------------------
 grpc_exec_record() {
   local relay_port="$1" sandbox_id="$2" ws_json="$3" cmd_json="$4" req_id="$5" out_file="$6" err_log="$7"
-  local t0 t1 a b ms cause status
+  local t0 t1 a b us frac ms cause status
   # ws_json and cmd_json arrive ALREADY ESCAPED, quotes included (escaped_mix / the caller's
   # one-shot workspace_key escape). err_log is a fixed per-slot path: `2>` truncates it on
   # every call, so the old mktemp+rm pair bought nothing. req_id is a number and needs no
@@ -1115,8 +1254,9 @@ grpc_exec_record() {
     # Subprocess forks in this function: grpcurl above (always -- it is the thing being
     # measured) and these greps (only after an Exec has already failed, so they cannot
     # contribute to a healthy rung's latency, and a failed Exec's latency is not in the
-    # distribution p95 is taken over anyway). ms below is pure arithmetic expansion, no
-    # command substitution and no extra fork (issue #291 item 1) -- so that count is complete.
+    # distribution p95 is taken over anyway). ms below is pure arithmetic expansion plus
+    # parameter expansion, no command substitution and no extra fork (issue #291 item 1) --
+    # so that count is complete.
     if grep -qi "workspace_key" "$err_log"; then
       cause="empty-workspace-key"
     elif grep -qi "mem" "$err_log"; then
@@ -1132,7 +1272,12 @@ grpc_exec_record() {
     fi
   fi
   a="${t0/./}"; b="${t1/./}"
-  ms=$(( (10#$b - 10#$a) / 1000 ))
+  us=$(( (10#$b - 10#$a) ))
+  # Fractional ms with NO fork: parameter expansion and arithmetic only. `1000 + us % 1000`
+  # lands in 1000..1999 so `${frac#1}` is the remainder zero-padded to three digits -- printf
+  # would be a command substitution, and this function is asserted to contain none (#291 item 2).
+  frac=$((1000 + us % 1000))
+  ms="$((us / 1000)).${frac#1}"
   echo "$ms $status $cause" >>"$out_file"
 }
 
@@ -1497,6 +1642,18 @@ stop_null_stack() {
   return 0
 }
 
+# build_exec_driver compiles the Go Exec client ONCE per run, when it is the selected client.
+#
+# A no-op on the reference path: a grpcurl run must not fail over ./cmd/exec-driver not
+# compiling, because it never invokes it. `go` is already an unconditional require_tool in
+# preflight (every arm builds some binary), so this adds no new tool requirement.
+build_exec_driver() {
+  [ "$EXEC_CLIENT" = "go" ] || return 0
+  log "exec-driver: building the persistent-connection Go Exec client (SH_E11_EXEC_CLIENT=go, issue #294)"
+  (cd "$REMOTE_WORKER_DIR" && go build -o "$E11_EXEC_DRIVER_BIN" ./cmd/exec-driver) ||
+    die "go build ./cmd/exec-driver failed - SH_E11_EXEC_CLIENT=go has no client to drive, so every rung would time a missing binary rather than an Exec"
+}
+
 # ---------------------------------------------------------------------------
 # run_density_rung: THE per-rung driver. Called identically for all three arms --
 # container, microvm, and driver-control (only sandbox_id, relay_port, and whether
@@ -1569,7 +1726,7 @@ run_density_rung() {
   # commands and the slot's workspace_key once per slot, before timing starts". The
   # derivations now go through the same helpers phase 1 uses, so the two cannot drift.
   # ---------------------------------------------------------------------------
-  local -a mix_json=() ws_json_by_slot=()
+  local -a mix_json=() ws_json_by_slot=() ws_raw_by_slot=()
   local mix_expected_count
   mapfile -t mix_json < <(escaped_mix)
   [ "${#mix_json[@]}" -gt 0 ] ||
@@ -1580,8 +1737,36 @@ run_density_rung() {
   local run_id_i
   for i in $(seq 1 "$c"); do
     run_id_i="$(slot_run_id "$arm" "$d" "$ram_mb" "$c" "$i")"
-    ws_json_by_slot[i]="$(json_escape "$(slot_workspace_key "$arm" "$run_id_i")")"
+    # ONE slot_workspace_key call, two consumers: the pre-escaped form the grpcurl path
+    # interpolates, and the raw form the Go path's plan carries (json.dumps escapes it there).
+    # Deriving it twice is how the two paths would drift into sending different keys.
+    ws_raw_by_slot[i]="$(slot_workspace_key "$arm" "$run_id_i")"
+    ws_json_by_slot[i]="$(json_escape "${ws_raw_by_slot[i]}")"
   done
+
+  # The Go client's plan, written HERE -- before wall_t0 -- so nothing it costs lands inside the
+  # timed window (issue #294, and the fork guard in tests/e11-density.test.sh asserts it). It
+  # lives under $RESULTS, not $E11_TMPDIR: cleanup_on_exit rm -rf's $E11_TMPDIR on every exit,
+  # including a refused rung's die, so a plan written there would not survive to be read -- only
+  # $RESULTS (never cleaned) actually makes it the artifact an operator can read after a refusal.
+  local plan_file="$RESULTS/plan-$rung_tag.json"
+  if [ "$EXEC_CLIENT" = "go" ]; then
+    local -a plan_argv=()
+    local plan_cmd
+    while IFS= read -r plan_cmd; do plan_argv+=("$plan_cmd"); done < <(e11_tool_call_mix)
+    for i in $(seq 1 "$c"); do
+      plan_argv+=("$(slot_req_base "$i")" "${ws_raw_by_slot[i]}" "$slot_dir/slot-$i.times" "$slot_dir/slot-$i.err")
+    done
+    # 30 is grpc_exec_record's own timeout_s, so both clients put the SAME Exec deadline on the
+    # wire; tests/e11-density.test.sh reads both out of this file and asserts they match.
+    write_rung_plan "$plan_file" "localhost:${relay_port}" "$sandbox_id" \
+      "$ITERS_PER_SLOT" "$WARMUP_PER_SLOT" 30 "$EXEC_MAX_TIME_S" \
+      "$mix_expected_count" "$c" "${plan_argv[@]}"
+    # A header BEFORE wall_t0, so it costs nothing inside the timed window: $RESULTS/e11-exec-driver.log
+    # is opened with >> and nothing ever truncates it, so every rung of every run appends untagged --
+    # and the Go refusal below points the operator at exactly this file.
+    printf '== %s\n' "$rung_tag" >>"$RESULTS/e11-exec-driver.log"
+  fi
 
   # ---------------------------------------------------------------------------
   # PHASE 2: the timed Exec loop, and nothing else.
@@ -1600,36 +1785,49 @@ run_density_rung() {
   host_sampler_loop "$sampler_file" "$sampler_stop" &
   E11_SAMPLER_PID="$!"
   pids=()
-  for ((i = 1; i <= c; i++)); do
-    (
-      # No run_id or workspace_key derivation in here: phase 2 needs only the pre-escaped key
-      # and the req_id base, so nothing that forks happens inside the timed window.
-      local req_base req
-      req_base="$(slot_req_base "$i")"
-      req="$req_base"
-
-      local times_file="$slot_dir/slot-$i.times" err_log="$slot_dir/slot-$i.err"
-      # Pre-escaped above, before wall_t0. Parameter expansion, not a command substitution:
-      # `local x="$(...)"` would trip SC2155, which is a WARNING and so a lint failure here.
-      local ws_json="${ws_json_by_slot[$i]}"
-      : >"$times_file"
-      : >"$err_log"
-      # A shell counter, not `wc -l` twice per Exec: the timed loop is this file's only
-      # writer, so the count is known without reading it back. `for mi in` over the array
-      # pre-escaped above also removes the process-substitution subshell the inner
-      # `while read` re-spawned on every pass over the mix.
-      local want=$((ITERS_PER_SLOT + WARMUP_PER_SLOT)) issued=0 mi
-      while [ "$issued" -lt "$want" ]; do
-        for mi in "${!mix_json[@]}"; do
-          req=$((req + 1))
-          grpc_exec_record "$relay_port" "$sandbox_id" "$ws_json" "${mix_json[$mi]}" "$req" "$times_file" "$err_log"
-          issued=$((issued + 1))
-          [ "$issued" -ge "$want" ] && break
-        done
-      done
-    ) &
+  # ONE process for the whole rung on the Go path (issue #294), c subshells on the grpcurl path.
+  #
+  # Both branches push onto the same pids array and are reaped by the same wait loop below, so
+  # the guarantee that follows -- a rung whose slots were not all measuring the same thing is
+  # never recorded -- holds identically for both.
+  #
+  # The grpcurl branch is UNCHANGED. It is the reference the Go client is compared against, so
+  # it must not be tidied, rewrapped or "improved" while the comparison is outstanding.
+  if [ "$EXEC_CLIENT" = "go" ]; then
+    "$E11_EXEC_DRIVER_BIN" --plan "$plan_file" >>"$RESULTS/e11-exec-driver.log" 2>&1 &
     pids+=("$!")
-  done
+  else
+    for ((i = 1; i <= c; i++)); do
+      (
+        # No run_id or workspace_key derivation in here: phase 2 needs only the pre-escaped key
+        # and the req_id base, so nothing that forks happens inside the timed window.
+        local req_base req
+        req_base="$(slot_req_base "$i")"
+        req="$req_base"
+
+        local times_file="$slot_dir/slot-$i.times" err_log="$slot_dir/slot-$i.err"
+        # Pre-escaped above, before wall_t0. Parameter expansion, not a command substitution:
+        # `local x="$(...)"` would trip SC2155, which is a WARNING and so a lint failure here.
+        local ws_json="${ws_json_by_slot[$i]}"
+        : >"$times_file"
+        : >"$err_log"
+        # A shell counter, not `wc -l` twice per Exec: the timed loop is this file's only
+        # writer, so the count is known without reading it back. `for mi in` over the array
+        # pre-escaped above also removes the process-substitution subshell the inner
+        # `while read` re-spawned on every pass over the mix.
+        local want=$((ITERS_PER_SLOT + WARMUP_PER_SLOT)) issued=0 mi
+        while [ "$issued" -lt "$want" ]; do
+          for mi in "${!mix_json[@]}"; do
+            req=$((req + 1))
+            grpc_exec_record "$relay_port" "$sandbox_id" "$ws_json" "${mix_json[$mi]}" "$req" "$times_file" "$err_log"
+            issued=$((issued + 1))
+            [ "$issued" -ge "$want" ] && break
+          done
+        done
+      ) &
+      pids+=("$!")
+    done
+  fi
   local exec_failures=0
   for pid in "${pids[@]}"; do
     wait "$pid" || exec_failures=$((exec_failures + 1))
@@ -1638,8 +1836,15 @@ run_density_rung() {
   : >"$sampler_stop"
   wait "$E11_SAMPLER_PID" 2>/dev/null || true
   E11_SAMPLER_PID=""
-  [ "$exec_failures" -eq 0 ] ||
+  if [ "$exec_failures" -ne 0 ]; then
+    # The message differs because the FAILURE differs. One Go process drives all c slots, so a
+    # non-zero exit says nothing about how many slots got timings -- it says the rung has none
+    # that can be trusted. Reporting "1 of 8 slot(s) failed" there would understate it.
+    if [ "$EXEC_CLIENT" = "go" ]; then
+      die "rung arm=$arm d=$d ram=${ram_mb}MiB c=$c: the Go exec-driver exited non-zero (see $RESULTS/e11-exec-driver.log) - one process drives all $c slots, so a non-zero exit means no slot's timings can be trusted; refusing to record the rung"
+    fi
     die "rung arm=$arm d=$d ram=${ram_mb}MiB c=$c had $exec_failures of $c slot(s) fail inside the timed loop - refusing to record a rung whose slots were not all measuring the same thing"
+  fi
   local wall_s
   wall_s="$(require_numeric wallSeconds "$(awk -v ns=$((wall_t1 - wall_t0)) 'BEGIN{printf "%.4f", ns/1000000000.0}')")" ||
     die "rung arm=$arm c=$c could not measure its own wall time (see the refusal above) - throughput is derived from it, so there is nothing to record"
@@ -1731,7 +1936,7 @@ run_density_rung() {
   cpu_samples="$(require_numeric hostCpuSamples "$(sampler_field "$sampler_file" 1 count)")" ||
     die "rung arm=$arm c=$c could not count its own host samples (see the refusal above)"
   [ "$cpu_samples" -gt 0 ] ||
-    die "rung arm=$arm d=$d ram=${ram_mb}MiB c=$c produced ZERO host samples over its timed window ($sampler_file is empty), so it has no under-load hostCpuFraction, memAvailableBytes, pssBytes or processCount at all. Refusing to backfill from the post-load snapshot: that idle reading IS the defect issue #291 item 1 is about, and crosses('cpu') can never fire on one. The window was shorter than ${SAMPLE_MIN_TICK_MS}ms - raise SH_E11_ITERS_PER_SLOT, or lower SH_E11_SAMPLE_INTERVAL_MS and SH_E11_SAMPLE_MIN_TICK_MS."
+    die "rung arm=$arm d=$d ram=${ram_mb}MiB c=$c produced ZERO host samples over its timed window ($sampler_file is empty), so it has no under-load hostCpuFraction, memAvailableBytes, pssBytes or processCount at all. Refusing to backfill from the post-load snapshot: that idle reading IS the defect issue #291 item 1 is about, and crosses('cpu') can never fire on one. The window was shorter than ${SAMPLE_MIN_TICK_MS}ms - lower SH_E11_SAMPLE_INTERVAL_MS, SH_E11_SAMPLE_MIN_TICK_MS and SH_E11_SAMPLE_SLICE_MS (the tick floor is SAMPLE_SLICE_MS, currently ${SAMPLE_SLICE_MS}ms, because slices_per_tick is SAMPLE_INTERVAL_MS/SAMPLE_SLICE_MS floored at 1). Raising SH_E11_ITERS_PER_SLOT also works for a SINGLE ladder, but NOT when you are comparing two clients: both arms must issue the same Exec count per slot to stay comparable, so fix the cadence instead."
   # A thin rung is legitimate (a fast arm at low c) and is NOT refused -- but it must not pass
   # unremarked, because hostCpuSamples is easy to miss in a 30-field record and a 1-2 sample mean
   # cannot support a saturation verdict. Warn at run time, where the operator is actually looking.
@@ -1844,6 +2049,16 @@ run_density_rung() {
   ram_json="$(dimension_literal guestRamMb "$ram_mb" "$required_dims")" ||
     die "rung arm=$arm c=$c cannot record guestRamMb (see the refusal above)"
 
+  # Interpolated as python literals below, so they are computed here rather than inline.
+  local exec_client_json driver_control_note exec_error_note
+  exec_client_json="$(exec_client_label)"
+  # The two proxyLimitations entries that DEPEND on which client ran. Both are written on both
+  # paths -- a limitation that only appears on the path that does not have it is not a
+  # disclosure. Neither string may contain an apostrophe: they are interpolated into
+  # single-quoted python literals.
+  driver_control_note="$(driver_control_note_for "$EXEC_CLIENT")"
+  exec_error_note="$(exec_error_note_for "$EXEC_CLIENT")"
+
   python3 -c "
 import json
 rec = {
@@ -1898,13 +2113,18 @@ rec = {
   'convergeMsP50': $converge_p50,
   'reclaimConvergenceS': $reclaim_converge_s,
   'drivingModel': 'closed-loop-per-slot',
+  # WHICH CLIENT issued the Execs these latencies came from (#294). Without it a go-driven
+  # ladder and a grpcurl-driven one are indistinguishable JSON, and comparing them is the
+  # entire reason the second client exists.
+  'execClient': '$exec_client_json',
   'staticSettings': json.loads('$(static_settings_json)'),
   'proxyLimitations': {
     'leaseSaturations': 'always 0 - driver bypasses the harness lease layer entirely',
     'coldAcquireRate': 'latency-classification proxy (>= ${COLD_LATENCY_MS}ms), not the real replenishment signal - no stats endpoint exists',
     'standbysResident': 'proxy: max(processCount - c, 0) - no pool introspection endpoint exists',
     'pssBytesCadence': 'pssBytes and processCount are sampled every ${SAMPLE_LOW_EVERY}th sampler tick (and always tick 1), not every tick: pgrep plus an N-file smaps_rollup walk at 1 Hz perturbs the density ceiling being measured. crosses(memory) reads memAvailableBytes, which IS every tick, so the bound classification is unaffected; PSS feeds the narrative. See pssSamples and processCountSamples for the actual counts (#291).',
-    'driverControlChunkDecode': 'driver-control is a STRICT LOWER BOUND on driver-only cost, not an exact one: the null-responder sends one End and no Chunk events, so grpcurl never decodes a chunk-carrying stream on this arm, while real Execs for mix commands that produce stdout do decode one or more Chunk events per call on the container/microvm arms. Subtracting driver-control latency therefore over-attributes some residue to the backend rather than the driver (#291 item 3).',
+    'driverControlChunkDecode': '$driver_control_note',
+    'execErrorStatus': '$exec_error_note',
   },
 }
 open('$out_json_path', 'w').write(json.dumps(rec, indent=2))
@@ -1995,6 +2215,8 @@ analyze_slice() {
 # ---------------------------------------------------------------------------
 main() {
   preflight
+  # After preflight, which validated EXEC_CLIENT and created $RESULTS.
+  build_exec_driver
   log "arms: ${E11_ARMS[*]} (microvm is Firecracker only - hardware-corrections F5; driver-control is the null-responder, issue #291 section 4)"
   log "D values: ${D_VALUES[*]}   guest RAM (MiB): ${RAM_MB_VALUES[*]}   active runs: ${ACTIVE_RUNS[*]}"
   [ -n "$MODEL_STUB_CMD" ] || log "no SH_E11_MODEL_STUB_CMD set - driving the Exec mix directly (disclosed limitation, see header)"

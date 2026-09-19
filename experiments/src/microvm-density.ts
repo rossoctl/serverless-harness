@@ -121,6 +121,15 @@ export interface RungSample {
    */
   samplingMode?: string;
   /**
+   * Which client issued this rung's Execs: `"grpcurl-per-exec"` (one process per call, the
+   * reference path) or `"go-persistent-conn"` (remote-worker/cmd/exec-driver, one connection
+   * per rung). Absent on records written before issue #294. NOTHING here scores it -- like
+   * `samplingMode`, it exists so a ladder's numbers can be attributed rather than merely
+   * compared, because the driver's own cost was 753ms of the published microVM arm's 1686ms
+   * p95 at c=64.
+   */
+  execClient?: string;
+  /**
    * The retained post-load snapshot, taken once after every slot exited. Kept under its own
    * names precisely so an idle reading can never again pass as an under-load one. NOTHING in
    * this module reads these.

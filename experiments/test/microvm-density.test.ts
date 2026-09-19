@@ -294,4 +294,29 @@ describe('E11 ladder analysis', () => {
     ]);
     expect(alsoIdle).toEqual(r);
   });
+
+  it('accepts a rung record carrying execClient, and older records without it', () => {
+    const withClient: RungSample = {
+      c: 8,
+      throughput: 241.6,
+      p95Ms: 44,
+      coldAcquireRate: 0,
+      pssBytes: 0,
+      memAvailableBytes: 808960000000,
+      hostCpuFraction: 0.2017,
+      processCount: 0,
+      standbysResident: 0,
+      idleStandbyResidency: 0,
+      leaseSaturations: 0,
+      execErrorsByCause: {},
+      execClient: 'go-persistent-conn',
+    };
+    expect(withClient.execClient).toBe('go-persistent-conn');
+
+    // The field is optional because every record written before #294 lacks it, and nothing
+    // scores it -- it exists so a ladder's numbers can be attributed to the client that
+    // produced them.
+    const { execClient: _dropped, ...withoutClient } = withClient;
+    expect((withoutClient as RungSample).execClient).toBeUndefined();
+  });
 });

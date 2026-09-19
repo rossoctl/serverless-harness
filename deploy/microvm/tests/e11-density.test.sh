@@ -569,6 +569,11 @@ if [ -n "$writer_body" ] && [ -n "$dim_body" ]; then
       errors_json='{}'
       SUBSTRATE=nested-m8i REPO_CACHE_SHAPE=accept-cold-fetch COLD_LATENCY_MS=50
       E11_RUN_ID=RUN-FIXTURE
+      # #294's interpolations. The label is what the checks below assert; the two notes stand
+      # in for the long disclosure strings, whose presence (not text) is what matters here.
+      exec_client_json=grpcurl-per-exec
+      driver_control_note='driver-control is a STRICT LOWER BOUND on driver-only cost'
+      exec_error_note='an in-stream ExecEvent.error is recorded as status=ok'
       eval "$writer_body"
     )
   }
@@ -628,6 +633,17 @@ print("missing:" + ",".join(missing) if missing else "all-present")
     "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["samplingMode"])' "$ok_out")" "in-rung-1hz-mean"
   check "the PSS/processCount cadence is disclosed in the record's own proxyLimitations" \
     "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("yes" if any("sampler tick" in v for v in d["proxyLimitations"].values()) else "no")' "$ok_out")" "yes"
+  # Provenance: which client issued the Execs this record's latencies came from (#294). Without
+  # it a go-driven ladder and a grpcurl-driven one are indistinguishable JSON, and comparing
+  # them is the whole point of building the second client.
+  check "the record carries execClient" \
+    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["execClient"])' "$ok_out")" "grpcurl-per-exec"
+  check "  ...and drivingModel is unchanged (open-loop is out of scope for #294)" \
+    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["drivingModel"])' "$ok_out")" "closed-loop-per-slot"
+  # The ExecError disclosure belongs in EVERY record, not only the Go ones: on the grpcurl path
+  # it is a live defect an operator reading these numbers needs to know about.
+  check "proxyLimitations discloses the ExecError status behaviour" \
+    "$(python3 -c 'import json,sys; print("execErrorStatus" in json.load(open(sys.argv[1]))["proxyLimitations"])' "$ok_out")" "True"
 
   # --- And the microvm arm's numbers stay NUMBERS (null there would be the sweep losing
   # the dimension it is sweeping, so dimension_literal refuses it).
@@ -674,6 +690,59 @@ print("missing:" + ",".join(missing) if missing else "all-present")
 
   rm -rf "$wr_tmpdir"
 fi
+
+echo "== execClient labels both clients, and nothing else (#294)"
+ecl_body="$(extract_fn exec_client_label || true)"
+check "exec_client_label is extractable" "$([ -n "$ecl_body" ] && echo yes || echo no)" "yes"
+for pair in "grpcurl:grpcurl-per-exec" "go:go-persistent-conn"; do
+  client="${pair%%:*}"
+  want="${pair##*:}"
+  got="$(
+    EXEC_CLIENT="$client"
+    eval "$ecl_body"
+    exec_client_label
+  )"
+  check "exec_client_label maps '$client' to '$want'" "$got" "$want"
+done
+
+echo "== the two path-dependent disclosures are chosen by client, and differ (#294)"
+dn_body="$(extract_fns driver_control_note_for exec_error_note_for || true)"
+check "the disclosure functions are extractable" "$([ -n "$dn_body" ] && echo yes || echo no)" "yes"
+
+dcn_go="$(eval "$dn_body"; driver_control_note_for go)"
+dcn_gc="$(eval "$dn_body"; driver_control_note_for grpcurl)"
+een_go="$(eval "$dn_body"; exec_error_note_for go)"
+een_gc="$(eval "$dn_body"; exec_error_note_for grpcurl)"
+
+# Path-specific CONTENT, not just "non-empty". A swap between the branches is the failure this
+# catches: the go path must not claim an ExecError is recorded as ok, and the grpcurl path must not
+# claim it is recorded as err.
+check "the go exec-error disclosure says status=err" \
+  "$(printf '%s' "$een_go" | grep -Fc 'recorded as status=err')" "1"
+check "  ...and does NOT claim status=ok for itself" \
+  "$(printf '%s' "$een_go" | grep -Fc 'is recorded as status=ok')" "0"
+check "the grpcurl exec-error disclosure says status=ok" \
+  "$(printf '%s' "$een_gc" | grep -Fc 'recorded as status=ok')" "1"
+check "the go driver-control disclosure marks the bound's tightness as unmeasured" \
+  "$(printf '%s' "$dcn_go" | grep -Fc 'its net effect on tightness is UNMEASURED')" "1"
+check "the grpcurl driver-control disclosure keeps the STRICT LOWER BOUND wording" \
+  "$(printf '%s' "$dcn_gc" | grep -Fc 'STRICT LOWER BOUND')" "1"
+# The two paths must actually differ -- if both branches returned the same string, every check above
+# could still pass while the disclosure stopped distinguishing the clients at all.
+check "the two exec-error disclosures differ between clients" \
+  "$([ "$een_go" != "$een_gc" ] && echo differ || echo same)" "differ"
+check "the two driver-control disclosures differ between clients" \
+  "$([ "$dcn_go" != "$dcn_gc" ] && echo differ || echo same)" "differ"
+# An unknown client must fall to the grpcurl text, matching exec_client_label's own defaulting, so a
+# future third client cannot silently acquire the go disclosures.
+check "an unrecognised client gets the grpcurl disclosures" \
+  "$([ "$(eval "$dn_body"; exec_error_note_for xyzzy)" = "$een_gc" ] && echo yes || echo no)" "yes"
+# Unsafe-character safety: these disclosure strings are interpolated into the record writer's
+# python3 -c "..." body through a DOUBLE-quoted bash string (deploy/microvm/e11-density.sh), so
+# an apostrophe, a $, a backtick or a backslash in the disclosure text would be expanded or
+# reinterpreted by bash and/or python before the record writer ever ran -- reject all four.
+check "no disclosure contains an apostrophe, a dollar sign, a backtick, or a backslash" \
+  "$(printf '%s%s%s%s' "$dcn_go" "$dcn_gc" "$een_go" "$een_gc" | tr -cd "'\$\`\\\\" | wc -c | tr -d ' ')" "0"
 
 # ---------------------------------------------------------------------------
 # percentile: a missing/empty input is a refusal, not a zero (review 4001908597).
@@ -866,7 +935,16 @@ check "the timed window is extractable and non-empty" \
 
 # NON-VACUOUSNESS: the detector must flag each removed command in a fixture that contains
 # it. Without this, "0 findings" below could mean the regex matches nothing.
-tw_detect() { printf '%s\n' "$1" | grep -cE '\bjson_escape\b|date \+%s%N|\bmktemp\b|\bwc -l\b'; }
+# python3 joins the list for issue #294. An interpreter startup inside the window is the same
+# defect class as the two json_escape interpreters #291 item 2 removed, reintroduced by the fix
+# for the spawn they were removed alongside.
+#
+# SCOPE, stated because it is easy to over-trust: this catches a LITERAL python3 between the
+# stamps. It does NOT catch write_rung_plan's call being moved into the window, because that
+# call line contains no such token and this guard never expands into the callee's body. The
+# branch section below asserts the call site's position directly, and that is the check that
+# covers the move.
+tw_detect() { printf '%s\n' "$1" | grep -cE '\bjson_escape\b|date \+%s%N|\bmktemp\b|\bwc -l\b|\bpython3\b'; }
 check "non-vacuousness: the detector flags a json_escape in the window" \
   "$(tw_detect '  -d "{\"command\":$(json_escape "$cmd\")}"')" "1"
 check "non-vacuousness: the detector flags a date +%s%N in the window" \
@@ -875,6 +953,10 @@ check "non-vacuousness: the detector flags an mktemp in the window" \
   "$(tw_detect '  err_log="$(mktemp "$E11_TMPDIR/errlog.XXXXXX")"')" "1"
 check "non-vacuousness: the detector flags a wc -l loop guard" \
   "$(tw_detect '  while [ "$(wc -l <"$times_file")" -lt "$want" ]; do')" "1"
+check "non-vacuousness: the detector flags a literal python3 in the window" \
+  "$(tw_detect '  python3 -c "import json"')" "1"
+check "scope: the detector does NOT see python3 through a write_rung_plan call" \
+  "$(tw_detect '  write_rung_plan "$plan_file" "localhost:8445" "$sandbox_id"')" "0"
 
 if [ -n "$tw_body" ]; then
   check "no json_escape, date, mktemp or wc runs inside the timed window" \
@@ -895,7 +977,7 @@ ger_nosubst() { printf '%s\n' "$1" | grep -cE '\$\([^(]'; }
 check "non-vacuousness: the detector flags a real command substitution" \
   "$(ger_nosubst 't0="$(date +%s%N)"')" "1"
 check "non-vacuousness: the detector does NOT flag arithmetic expansion" \
-  "$(ger_nosubst 'ms=$(( (10#$b - 10#$a) / 1000 ))')" "0"
+  "$(ger_nosubst 'us=$(( (10#$b - 10#$a) )); frac=$((1000 + us % 1000)); ms="$((us / 1000)).${frac#1}"')" "0"
 ger_body="$(extract_fn grpc_exec_record | grep -v '^[[:space:]]*#' || true)"
 check "grpc_exec_record is extractable" "$([ -n "$ger_body" ] && echo yes || echo no)" "yes"
 if [ -n "$ger_body" ]; then
@@ -1583,8 +1665,11 @@ if [ -n "$bar_rdr" ]; then
   fi
   check "both phases derive the run id from ONE helper, so they cannot drift" \
     "$(printf '%s\n' "$bar_rdr" | grep -c 'slot_run_id ')" "2"
-  check "both phases derive the req_id base from ONE helper" \
-    "$(printf '%s\n' "$bar_rdr" | grep -c 'slot_req_base ')" "2"
+  # Three call sites since issue #294's Go plan: converge, the timed loop, and the
+  # plan-building loop that feeds write_rung_plan's reqBase -- all deriving from the
+  # SAME helper, so they cannot drift from each other.
+  check "all call sites derive the req_id base from ONE helper" \
+    "$(printf '%s\n' "$bar_rdr" | grep -c 'slot_req_base ')" "3"
 fi
 
 echo "== the slot-identity helpers are deterministic in (arm, d, ram_mb, c, i)"
@@ -1651,6 +1736,7 @@ if [ -n "$bar_body" ]; then
       PROC_ROOT="$bar_tmpdir/proc" VMM_PROC_PATTERN=__none__ VIRTIOFSD_PROC_PATTERN=__none__ \
       SAMPLE_INTERVAL_MS=1000 SAMPLE_SLICE_MS=100 SAMPLE_MIN_TICK_MS=200 SAMPLE_LOW_EVERY=5 \
       EXEC_MAX_TIME_S=45 PROTO_IMPORT_PATH=/tmp PROTO_REL_PATH=x.proto \
+      EXEC_CLIENT=grpcurl \
       bash "$bar_probe" container - - 2 e11-test 8444 "$bar_tmpdir/out.json"
   }
 
@@ -2467,7 +2553,355 @@ check "kill_relay_by_port dies loudly rather than returning silently if the port
   "$(sed -n '/^kill_relay_by_port() {/,/^}/p' "$SCRIPT" | grep -c 'die ')" "1"
 check "kill_relay_by_port's cleanup-trap path logs and returns instead of dying" \
   "$(sed -n '/^kill_relay_by_port() {/,/^}/p' "$SCRIPT" | grep -c 'E11_IN_CLEANUP')" "1"
+# ---------------------------------------------------------------------------
+# SH_E11_EXEC_CLIENT: which client issues the timed Execs (issue #294)
+# ---------------------------------------------------------------------------
+echo "== the Exec client is selectable, defaults to grpcurl, and refuses anything else (#294)"
 
+# The DEFAULT is the property that makes "opt-in" true rather than claimed: #294's own
+# acceptance requires the bash path to stay the reference until the two are compared on one
+# host, and a default of "go" would silently retire it.
+check "SH_E11_EXEC_CLIENT defaults to grpcurl" \
+  "$(grep -c 'EXEC_CLIENT="${SH_E11_EXEC_CLIENT:-grpcurl}"' "$SCRIPT")" "1"
+
+vec_body="$(extract_fn validate_exec_client || true)"
+check "validate_exec_client is extractable" "$([ -n "$vec_body" ] && echo yes || echo no)" "yes"
+
+# Both accepted values, and a refusal for everything else. A typo would otherwise record a
+# ladder under the wrong execClient and it would be compared against the wrong table.
+for client in grpcurl go; do
+  out="$(
+    EXEC_CLIENT="$client"
+    eval "$vec_body"
+    die() {
+      echo "DIED: $*"
+      exit 1
+    }
+    validate_exec_client && echo ACCEPTED
+  )"
+  check "validate_exec_client accepts '$client'" "$out" "ACCEPTED"
+done
+# The invalid value must contain NEITHER accepted name. `grpcurl-go` did, and since die echoes
+# the bad value back, the input itself satisfied a "does the message name both?" grep -- the
+# check could not fail. Use a value that shares no substring with either answer.
+out="$(
+  # shellcheck disable=SC2034 # read by validate_exec_client, sourced via eval below
+  EXEC_CLIENT="xyzzy"
+  eval "$vec_body"
+  die() {
+    echo "DIED: $*"
+    exit 1
+  }
+  validate_exec_client && echo ACCEPTED
+)"
+check "validate_exec_client refuses an unrecognised value" \
+  "$(printf '%s' "$out" | grep -c '^DIED:')" "1"
+# Each accepted value named SEPARATELY, matched on its quoted form as the message writes it, so
+# neither assertion can be satisfied by the rejected input being echoed back.
+check "  ...and its refusal names 'grpcurl' as an accepted value" \
+  "$(printf '%s' "$out" | grep -c "'grpcurl'")" "1"
+check "  ...and its refusal names 'go' as an accepted value" \
+  "$(printf '%s' "$out" | grep -c "'go'")" "1"
+# NON-VACUOUSNESS: the rejected value must NOT appear in quotes in a way that could satisfy
+# either check above. Proven by feeding the detector a stripped-down message.
+check "non-vacuousness: a refusal that only quotes the bad value fails the 'grpcurl' check" \
+  "$(printf '%s' "DIED: SH_E11_EXEC_CLIENT is 'xyzzy', which is neither" | grep -c "'grpcurl'")" "0"
+
+# preflight must validate it BEFORE any work: the build below depends on the value.
+pf_body="$(extract_fn preflight || true)"
+check "preflight validates the Exec client" \
+  "$(printf '%s\n' "$pf_body" | grep -c 'validate_exec_client')" "1"
+
+# build_exec_driver is a NO-OP on the reference path: a grpcurl run must not need a Go
+# toolchain moment it never uses, and must not fail over ./cmd/exec-driver not compiling.
+bed_body="$(extract_fn build_exec_driver || true)"
+check "build_exec_driver is extractable" "$([ -n "$bed_body" ] && echo yes || echo no)" "yes"
+check "build_exec_driver returns early unless the Go client was selected" \
+  "$(printf '%s\n' "$bed_body" | grep -c '\[ "\$EXEC_CLIENT" = "go" \] || return 0')" "1"
+check "build_exec_driver builds ./cmd/exec-driver" \
+  "$(printf '%s\n' "$bed_body" | grep -c 'go build -o "\$E11_EXEC_DRIVER_BIN" ./cmd/exec-driver')" "1"
+check "build_exec_driver dies with a reason when the build fails" \
+  "$(printf '%s\n' "$bed_body" | grep -c 'die "go build ./cmd/exec-driver failed')" "1"
+# Position, not presence. `grep -c build_exec_driver` passed with the two calls in either order,
+# which made the check's own name false: what matters is that preflight -- which is what creates
+# $RESULTS -- runs BEFORE the build writes a binary into it.
+main_body="$(extract_fn main)"
+check "main is extractable" "$([ -n "$main_body" ] && echo yes || echo no)" "yes"
+mb_pf_line="$(printf '%s\n' "$main_body" | grep -n '^  preflight$' | head -n1 | cut -d: -f1)"
+mb_bed_line="$(printf '%s\n' "$main_body" | grep -n '^  build_exec_driver$' | head -n1 | cut -d: -f1)"
+check "main calls preflight" "$([ -n "$mb_pf_line" ] && echo yes || echo no)" "yes"
+check "main calls build_exec_driver" "$([ -n "$mb_bed_line" ] && echo yes || echo no)" "yes"
+check "  ...and build_exec_driver comes AFTER preflight, which creates \$RESULTS" \
+  "$([ -n "$mb_pf_line" ] && [ -n "$mb_bed_line" ] && [ "$mb_pf_line" -lt "$mb_bed_line" ] && echo yes || echo no)" "yes"
+# NON-VACUOUSNESS: the comparison must be able to say no. Same arithmetic, reversed operands.
+check "non-vacuousness: the position comparison reports no when the order is reversed" \
+  "$([ -n "$mb_pf_line" ] && [ -n "$mb_bed_line" ] && [ "$mb_bed_line" -lt "$mb_pf_line" ] && echo yes || echo no)" "no"
+
+# The binary lives under $RESULTS, like the null-responder's, so a run leaves its artifacts
+# in one place and preflight's own `mkdir -p "$RESULTS"` has already happened.
+check "the exec-driver binary path is under \$RESULTS" \
+  "$(grep -c 'E11_EXEC_DRIVER_BIN="\$RESULTS/.e11-exec-driver-bin"' "$SCRIPT")" "1"
+
+
+# ---------------------------------------------------------------------------
+# write_rung_plan: the bash-to-Go boundary (issue #294)
+# ---------------------------------------------------------------------------
+echo "== write_rung_plan emits a plan exec-driver can consume, with disjoint req_id spaces (#294)"
+
+wrp_body="$(extract_fns write_rung_plan || true)"
+check "write_rung_plan is extractable" "$([ -n "$wrp_body" ] && echo yes || echo no)" "yes"
+
+plan_out="$(mktemp "${TMPDIR:-/tmp}/e11-plan.XXXXXX")"
+# Two slots, bases from the REAL slot_req_base, and a mix containing the exact characters a
+# hand-rolled bash JSON writer would corrupt: a double quote, a backslash, a pipe and a
+# redirect. If these survive, escaping is genuinely json.dumps's job.
+(
+  eval "$(extract_fns slot_req_base write_rung_plan)"
+  write_rung_plan "$plan_out" "localhost:8445" "e11-driver-control" \
+    7 2 30 45 3 2 \
+    'true' 'echo "a\b" > /tmp/x' 'grep -c e11 /tmp/x | wc -l' \
+    "$(slot_req_base 1)" '' "/tmp/slots/slot-1.times" "/tmp/slots/slot-1.err" \
+    "$(slot_req_base 2)" 'e11-microvm-d2-ram256-c2-slot2' "/tmp/slots/slot-2.times" "/tmp/slots/slot-2.err"
+)
+check "write_rung_plan wrote a non-empty plan" "$([ -s "$plan_out" ] && echo yes || echo no)" "yes"
+
+plan_read() { python3 -c "import json,sys; print(json.load(open(sys.argv[1]))$1)" "$plan_out"; }
+check "  target" "$(plan_read "['target']")" "localhost:8445"
+check "  sandboxId" "$(plan_read "['sandboxId']")" "e11-driver-control"
+check "  itersPerSlot" "$(plan_read "['itersPerSlot']")" "7"
+check "  warmupPerSlot" "$(plan_read "['warmupPerSlot']")" "2"
+check "  execTimeoutS" "$(plan_read "['execTimeoutS']")" "30"
+check "  callDeadlineS" "$(plan_read "['callDeadlineS']")" "45"
+check "  the whole mix is carried, in order" "$(plan_read "['mix'][0]")" "true"
+check "  a mix command with a quote and a backslash survives verbatim" \
+  "$(plan_read "['mix'][1]")" 'echo "a\b" > /tmp/x'
+check "  a mix command with a pipe survives verbatim" \
+  "$(plan_read "['mix'][2]")" 'grep -c e11 /tmp/x | wc -l'
+check "  slot count" "$(plan_read "['slots'].__len__()")" "2"
+# The req_id spaces come from the REAL slot_req_base, so this is the property that
+# exec-driver's validateReqIDRanges enforces, asserted at the source.
+check "  slot 1 reqBase is slot_req_base 1" "$(plan_read "['slots'][0]['reqBase']")" "1000000"
+check "  slot 2 reqBase is slot_req_base 2" "$(plan_read "['slots'][1]['reqBase']")" "2000000"
+check "  the container arm's empty workspace_key is preserved as empty" \
+  "$(plan_read "['slots'][0]['workspaceKey']")" ""
+check "  the microvm arm's workspace_key is carried" \
+  "$(plan_read "['slots'][1]['workspaceKey']")" "e11-microvm-d2-ram256-c2-slot2"
+check "  slot 1 timesFile" "$(plan_read "['slots'][0]['timesFile']")" "/tmp/slots/slot-1.times"
+check "  slot 2 errFile" "$(plan_read "['slots'][1]['errFile']")" "/tmp/slots/slot-2.err"
+rm -f "$plan_out"
+
+# A partial mix would silently shrink what every slot loops over -- the same defect the
+# existing escaped_mix count assertion guards on the grpcurl path.
+plan_out2="$(mktemp "${TMPDIR:-/tmp}/e11-plan.XXXXXX")"
+wrp_mismatch="$(
+  eval "$(extract_fns write_rung_plan)"
+  die() {
+    echo "DIED"
+    exit 1
+  }
+  write_rung_plan "$plan_out2" "localhost:8445" "sb" 7 2 30 45 3 1 \
+    'true' 'false' \
+    1000000 '' /tmp/a.times /tmp/a.err 2>/dev/null || echo REFUSED
+)"
+check "write_rung_plan refuses an argv that does not match its own counts" \
+  "$(printf '%s' "$wrp_mismatch" | grep -cE 'DIED|REFUSED')" "1"
+rm -f "$plan_out2"
+
+# DRIFT GUARD: the plan's execTimeoutS must equal the timeout_s grpc_exec_record puts on the
+# wire, or the two clients would be sending different Exec deadlines and their latencies would
+# not be comparable. Both are read out of the real source text.
+ger_timeout="$(extract_fn grpc_exec_record | grep -o '\\"timeout_s\\":[0-9]*' | head -n1 | cut -d: -f2)"
+rdr_timeout="$(extract_fn run_density_rung | grep -A3 'write_rung_plan "\$plan_file"' | grep -oE '"\$ITERS_PER_SLOT" "\$WARMUP_PER_SLOT" [0-9]+' | grep -oE '[0-9]+$')"
+check "the plan's execTimeoutS matches grpc_exec_record's timeout_s" "$rdr_timeout" "$ger_timeout"
+
+
+# ---------------------------------------------------------------------------
+# The phase-2 branch (issue #294)
+# ---------------------------------------------------------------------------
+echo "== phase 2 runs ONE exec-driver process on the Go path and c subshells on the grpcurl path (#294)"
+
+rdr_body="$(extract_fn run_density_rung || true)"
+check "run_density_rung is extractable" "$([ -n "$rdr_body" ] && echo yes || echo no)" "yes"
+
+# The window body, extracted exactly as the fork guard above does it.
+win="$(printf '%s\n' "$rdr_body" | awk '/wall_t0="/{f=1; next} /wall_t1="/{exit} f{print}' | grep -v '^[[:space:]]*#')"
+check "the Go path runs the exec-driver binary inside the timed window" \
+  "$(printf '%s\n' "$win" | grep -Fc '"$E11_EXEC_DRIVER_BIN" --plan "$plan_file"')" "1"
+check "  ...exactly once, not once per slot" \
+  "$(printf '%s\n' "$win" | grep -c 'for ((i = 1; i <= c; i++))')" "1"
+check "  ...and the grpcurl subshell loop is still there, unchanged" \
+  "$(printf '%s\n' "$win" | grep -Fc 'grpc_exec_record "$relay_port"')" "1"
+check "  ...selected by EXEC_CLIENT, not by arm" \
+  "$(printf '%s\n' "$win" | grep -Fc 'if [ "$EXEC_CLIENT" = "go" ]')" "1"
+# write_rung_plan must NOT be in the window: Task 5 put it before wall_t0 and the fork guard
+# above now flags python3, but assert the call site directly too, because that guard would also
+# pass if the call vanished entirely.
+check "write_rung_plan is called OUTSIDE the timed window" \
+  "$(printf '%s\n' "$win" | grep -c 'write_rung_plan')" "0"
+check "  ...and is called somewhere in run_density_rung" \
+  "$(printf '%s\n' "$rdr_body" | grep -Fc 'write_rung_plan "$plan_file"')" "1"
+
+# The refusal must not claim "1 of c slots" when one process drove all c of them.
+check "the Go path's refusal says the whole rung is invalid, not one slot" \
+  "$(printf '%s\n' "$rdr_body" | grep -c 'the Go exec-driver exited non-zero')" "1"
+check "  ...and the grpcurl path keeps its per-slot refusal" \
+  "$(printf '%s\n' "$rdr_body" | grep -c 'slot(s) fail inside the timed loop')" "1"
+
+# Both paths still go through the SAME wait-and-refuse shape, which is what makes "a rung whose
+# slots were not all measuring the same thing is never recorded" true for both.
+check "both paths are waited on through the same pids array" \
+  "$(printf '%s\n' "$rdr_body" | grep -Fc 'wait "$pid" || exec_failures=$((exec_failures + 1))')" "1"
+
+# The ENQUEUE, not just the wait. The check above counts the shared wait loop, which stays at 1
+# whether or not the Go branch ever adds its pid to the array -- so on its own it cannot catch
+# the Go process being forked and then never waited on. That failure is silent and it corrupts
+# the measurement: wall_t1 would be stamped without blocking on the driver, so the rung's wall
+# time and throughput would describe a run that had not finished, and exec_failures would never
+# see a Go-side failure.
+# Scoped to the timed window on purpose: phase 1's converge loop has a third pids+= of its own,
+# outside the window, so a whole-function count would be 3 and would not say what we mean.
+check "both branches inside the timed window enqueue their pid" \
+  "$(printf '%s\n' "$win" | grep -Fc 'pids+=("$!")')" "2"
+# NON-VACUOUSNESS: the detector must be able to report a different number. Two literal
+# fixtures -- one with both enqueues, one with a single enqueue -- run through the same
+# grep -Fc prove it discriminates 2 from 1 rather than always reporting one fixed number.
+check "non-vacuousness: the enqueue detector reports 2 for a two-enqueue fixture" \
+  "$(printf 'pids+=("$!")\npids+=("$!")\n' | grep -Fc 'pids+=("$!")')" "2"
+check "non-vacuousness: the enqueue detector reports 1 for a one-enqueue fixture" \
+  "$(printf 'pids+=("$!")\n' | grep -Fc 'pids+=("$!")')" "1"
+
+# Position, not just presence: two enqueues inside the window could both sit in one branch.
+# This asserts the Go invocation is immediately followed by its own enqueue.
+check "the Go branch's invocation is immediately followed by its own pids+=" \
+  "$(printf '%s\n' "$win" | grep -A1 -F '"$E11_EXEC_DRIVER_BIN" --plan "$plan_file"' | grep -Fc 'pids+=("$!")')" "1"
+
+# Converge stays on grpcurl on BOTH paths -- a stated non-goal. It is already outside the timed
+# window and reported separately as convergeMsP50, so routing it through the new client would
+# move a number this work is not measuring, inside the same PR that moves the one it is.
+cs_body="$(extract_fn converge_slot || true)"
+check "converge_slot is extractable" "$([ -n "$cs_body" ] && echo yes || echo no)" "yes"
+check "converge still drives grpcurl, on every path" \
+  "$(printf '%s\n' "$cs_body" | grep -c 'grpcurl -plaintext')" "1"
+check "  ...and converge is not routed through EXEC_CLIENT at all" \
+  "$(printf '%s\n' "$cs_body" | grep -c 'EXEC_CLIENT')" "0"
+# ---------------------------------------------------------------------------
+# SEAM CLOSURE (issue #294): the real plan writer -> the real binary -> the real responder.
+#
+# Everything above tests ONE side of the bash/Go boundary. This runs both. e11-density.sh
+# itself cannot run here (it needs /proc, cgroups and Linux), so this is where the seam is
+# actually verified, and it needs none of those things.
+# ---------------------------------------------------------------------------
+echo "== the real write_rung_plan drives the real exec-driver against the real null-responder (#294)"
+
+if ! command -v go >/dev/null 2>&1; then
+  echo "  SKIP: no go on PATH, so the exec-driver and null-responder cannot be built"
+else
+  seam_dir="$(mktemp -d "${TMPDIR:-/tmp}/e11-seam.XXXXXX")"
+  seam_rc=0
+  (
+    cd "$DIR/../../remote-worker" &&
+      go build -o "$seam_dir/exec-driver" ./cmd/exec-driver &&
+      go build -o "$seam_dir/null-responder" ./cmd/null-responder
+  ) >"$seam_dir/build.log" 2>&1 || seam_rc=$?
+  check "both binaries build" "$seam_rc" "0"
+  if [ "$seam_rc" -ne 0 ]; then
+    # The driver-failure path below dumps its log; this one must too. $seam_dir is removed
+    # unconditionally at the end of this section, so a compiler error not printed here is a
+    # compiler error nobody will ever see -- and this is the only off-rig proof of the seam.
+    echo "  go build said: $(cat "$seam_dir/build.log")"
+  fi
+
+  if [ "$seam_rc" -eq 0 ]; then
+    # An ephemeral-ish port well away from the driver's defaults (8444/8445), so a stray relay
+    # or responder from another run cannot answer this test's Execs.
+    seam_port=18447
+    "$seam_dir/null-responder" --listen "127.0.0.1:$seam_port" >"$seam_dir/responder.log" 2>&1 &
+    seam_pid=$!
+    # A CI timeout or SIGINT between here and the kill below would otherwise leave a gRPC
+    # listener bound to this port for as long as the machine stays up. Split from a single
+    # combined trap (review item 5): under bash a non-exiting INT/TERM handler returns
+    # control to the script rather than terminating it, so a Ctrl-C or CI SIGTERM only reaped
+    # the listener and let the suite continue -- and if the signal landed after the last seam
+    # check, the suite printed "Total failures: 0" and exited 0 for a job someone cancelled.
+    # The INT/TERM trap now reaps the listener AND re-exits with the conventional 128+signum
+    # status for SIGINT (130), so cancellation is honored; EXIT keeps doing only cleanup. Both
+    # are cleared after the normal teardown so neither can fire twice or mask a later signal.
+    trap 'kill "$seam_pid" 2>/dev/null || true; exit 130' INT TERM
+    trap 'kill "$seam_pid" 2>/dev/null || true' EXIT
+    # Wait for the listener rather than sleeping a guessed interval.
+    seam_up=no
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      if grep -q 'serving sandbox.v1.SandboxExec' "$seam_dir/responder.log" 2>/dev/null; then
+        seam_up=yes
+        break
+      fi
+      sleep 0.25
+    done
+    check "the null-responder came up" "$seam_up" "yes"
+
+    # THE REAL write_rung_plan, with slot identity from THE REAL slot_req_base and the mix from
+    # THE REAL e11_tool_call_mix. Nothing here is a rewritten substitute.
+    seam_plan="$seam_dir/plan.json"
+    seam_iters=5
+    seam_warmup=2
+    seam_c=3
+    (
+      eval "$(extract_fns die slot_req_base e11_tool_call_mix write_rung_plan)"
+      seam_argv=()
+      while IFS= read -r seam_cmd; do seam_argv+=("$seam_cmd"); done < <(e11_tool_call_mix)
+      seam_mix_count="${#seam_argv[@]}"
+      for i in 1 2 3; do
+        seam_argv+=("$(slot_req_base "$i")" "" "$seam_dir/slot-$i.times" "$seam_dir/slot-$i.err")
+      done
+      write_rung_plan "$seam_plan" "localhost:$seam_port" "e11-driver-control" \
+        "$seam_iters" "$seam_warmup" 30 45 "$seam_mix_count" "$seam_c" "${seam_argv[@]}"
+    ) >"$seam_dir/plan.log" 2>&1
+    check "write_rung_plan produced a plan" "$([ -s "$seam_plan" ] && echo yes || echo no)" "yes"
+
+    # THE REAL BINARY, reading THAT plan.
+    drv_rc=0
+    "$seam_dir/exec-driver" --plan "$seam_plan" >"$seam_dir/driver.log" 2>&1 || drv_rc=$?
+    check "exec-driver accepted the real plan and exited 0" "$drv_rc" "0"
+    if [ "$drv_rc" -ne 0 ]; then
+      echo "  exec-driver said: $(cat "$seam_dir/driver.log")"
+    fi
+
+    # The times-file contract, end to end. iters+warmup lines per slot, all ok, all three fields.
+    for i in 1 2 3; do
+      check "slot $i wrote iters+warmup lines" \
+        "$(wc -l <"$seam_dir/slot-$i.times" | tr -d ' ')" "$((seam_iters + seam_warmup))"
+      # $1's shape is pinned to whole.fractional with exactly three decimal digits (review on
+      # #294/#296): microseconds formatted as milliseconds to three decimal places, not the
+      # bare integer the pre-fix truncation produced.
+      check "  ...every line is '<ms> <status> <cause>' with status ok" \
+        "$(awk 'NF==3 && $2=="ok" && $3=="-" && $1 ~ /^[0-9]+\.[0-9][0-9][0-9]$/ {n++} END{print n+0}' "$seam_dir/slot-$i.times")" \
+        "$((seam_iters + seam_warmup))"
+      check "  ...and its err file is empty, because nothing failed" \
+        "$([ -s "$seam_dir/slot-$i.err" ] && echo nonempty || echo empty)" "empty"
+    done
+
+    # The aggregation run_density_rung performs on these files, reproduced here: the warmup is
+    # trimmed off the FRONT and exactly ITERS lines remain. This is the property that makes
+    # "nothing downstream changed" true rather than asserted.
+    check "warmup trimming leaves exactly ITERS steady-state samples per slot" \
+      "$(tail -n "+$((seam_warmup + 1))" "$seam_dir/slot-1.times" | head -n "$seam_iters" | wc -l | tr -d ' ')" \
+      "$seam_iters"
+
+    # And the req_ids the RESPONDER saw are disjoint and start one past each base. The
+    # null-responder echoes the request's req_id in its End, so its own log is not a record of
+    # them -- but the plan's bases plus the line counts pin the space, and exec-driver's own Go
+    # test asserts the server-side view. What is asserted here is that the plan the REAL writer
+    # produced carries the REAL slot_req_base spacing.
+    check "the plan's slot bases are slot_req_base's, 1000000 apart" \
+      "$(python3 -c 'import json,sys; s=json.load(open(sys.argv[1]))["slots"]; print(",".join(str(x["reqBase"]) for x in s))' "$seam_plan")" \
+      "1000000,2000000,3000000"
+
+    kill "$seam_pid" 2>/dev/null || true
+    wait "$seam_pid" 2>/dev/null || true
+    trap - INT TERM EXIT
+  fi
+  rm -rf "$seam_dir"
+fi
 echo
 echo "Total failures: $fails"
 exit "$fails"
