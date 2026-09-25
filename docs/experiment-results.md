@@ -1,7 +1,12 @@
 # Serverless Harness — Experiment Results (E1–E5)
 
-_Consolidated findings, June 2026. Source data: `experiments/RESULTS.md` (E2, E5),
-`deploy/knative/EXPERIMENTS.md` (E1, E3, E4). Designs: `docs/specs/2026-06-{23,24,25}-*.md`._
+_Consolidated findings, June 2026. Source data:
+[`moca-experiments/experiments/RESULTS.md`](https://github.com/rossoctl/moca-experiments/blob/main/experiments/RESULTS.md)
+(E2, E5),
+[`moca-experiments/knative/EXPERIMENTS.md`](https://github.com/rossoctl/moca-experiments/blob/main/knative/EXPERIMENTS.md)
+(E1, E3, E4) — both moved to a separate repo 2026-09-25, see
+`docs/specs/2026-09-24-ra1-density-cutover-and-repo-rearchitecture-design.md`. Designs:
+`docs/specs/2026-06-{23,24,25}-*.md`._
 
 ## The thesis under test
 
@@ -40,7 +45,7 @@ the pod-runtime (~75% cheaper). Gate: serverless ≤ 0.6 × persistent. **PASS.*
 work + ~30s scale-to-zero retention), independent of idle length, while persistent grows with the
 window — so the saving widens with idle time. A short idle (≈120s) does **not** clear the gate
 (ratio ~0.78); the result reflects a genuinely idle-heavy pattern. pod-seconds is a runtime proxy,
-not a billing model. _Reproduce:_ `deploy/knative/e1-economics.sh`.
+not a billing model. _Reproduce:_ `knative/e1-economics.sh` in `moca-experiments`.
 
 ## E2 — Local reconstruction cost (the compaction-checkpoint fast path)
 
@@ -55,7 +60,10 @@ E2 measures exactly that, in-process, with a counting backend.
 reads a **constant 6 entries / ~900 bytes**, while `openFromBackend` reads the whole log
 (53→5003 entries, 7.5KB→707KB). The backend/checkpoint ratio rises **8.8 → 33.8 → 167.2 → 833.8**,
 and `buildSessionContext()` is byte-identical under both loaders at every N (correctness preserved).
-**PASS.** _Reproduce:_ `pnpm -C experiments test e2-reconstruction-cost`.
+**PASS.** _Reproduce:_ `pnpm -C experiments test e2-reconstruction-cost` from a pre-split
+checkout (see caveat below) -- preserved as a historical record in
+[`moca-experiments/experiments/`](https://github.com/rossoctl/moca-experiments/tree/main/experiments),
+not standalone-runnable there.
 
 ## E3 — Session fidelity + mobility
 
@@ -69,7 +77,7 @@ context — the basis for scale-to-zero and for moving a session between pods.
 - **Mobility** (M7, cluster): plant a fact, force the pod to zero (confirmed gone), then a
   follow-up on a **fresh** pod recalled the planted token (`ZEBRA42`) from the Redis log.
 
-**Result.** Both hold. **PASS.** _Reproduce:_ `deploy/knative/e3-mobility.sh` (mobility);
+**Result.** Both hold. **PASS.** _Reproduce:_ `knative/e3-mobility.sh` in `moca-experiments` (mobility);
 `harness/test/checkpoint.test.ts` (fidelity).
 
 ## E4 — Crash recovery as a byproduct
@@ -81,7 +89,7 @@ mid-session loses no committed work.
 --force` mid-session, then issue a recovery turn on the freshly-started pod.
 
 **Result.** The post-crash turn recalled all three planted facts (APPLE/BANANA/CHERRY) — zero
-completed-turn loss. **PASS.** _Reproduce:_ `deploy/knative/e4-recovery.sh`.
+completed-turn loss. **PASS.** _Reproduce:_ `knative/e4-recovery.sh` in `moca-experiments`.
 
 ## E5 — Budget-voter enforcement
 
@@ -92,7 +100,8 @@ baseline) and blocks the next `tool_call` once over cap, appending one `abort` l
 
 **Result.** Over cap → tool call blocked and **exactly one** `abort` persisted to real Redis;
 cap unset → inert (no block, no `abort`). A key-gated live run confirms the same end-to-end with a
-real model. **PASS.** _Reproduce:_ `pnpm -C experiments test e5-budget-structural` (gate);
+real model. **PASS.** _Reproduce:_ `pnpm -C experiments test e5-budget-structural` from a
+pre-split checkout (gate);
 `e5-budget-live.test.ts` (live, `SH_RUN_LIVE=1`).
 
 ---
@@ -117,22 +126,41 @@ driver-local / consolidated split E1/E3/E4 and E2/E5 already use here, but publi
 own consolidated results file rather than extending this one:
 
 - **P4 — MicroVM sandbox tier (E10 lifecycle primitives, E11 density/replenishment
-  ceiling):** drivers live in `deploy/microvm/`; results are consolidated in
-  [`deploy/microvm/EXPERIMENTS.md`](../deploy/microvm/EXPERIMENTS.md). As of this writing,
+  ceiling):** drivers live in `microvm/` in
+  [`moca-experiments`](https://github.com/rossoctl/moca-experiments); results are consolidated in
+  [`moca-experiments/microvm/EXPERIMENTS.md`](https://github.com/rossoctl/moca-experiments/blob/main/microvm/EXPERIMENTS.md). As of this writing,
   E11's driver and its cluster-free test are built and green, but the density sweep has
   only been exercised for shape (no run against real hardware) — see that file's E11
   section for exactly which numbers are filled in and which are still named blanks.
 
 ## How to reproduce everything
 
+E2/E5 (`experiments/`) and the E1/E3/E4 cluster drivers (`deploy/knative/`) moved to
+[rossoctl/moca-experiments](https://github.com/rossoctl/moca-experiments) on 2026-09-25, with git
+history preserved.
+
+**Caveat on `experiments/` (E2/E5) specifically:** it depends on `@sh/harness` and
+`@sh/session-backend` as `workspace:*` packages and on `pi-fork` via a `link:` path — none of
+which exist standalone in `moca-experiments`. `pnpm -C experiments test` only actually runs from
+_inside this monorepo's workspace, before the split_ (i.e. checked out at or before
+commit `3057c5f`, the last commit before the split). The code in `moca-experiments/experiments/`
+is preserved as a historical record of what
+E2/E5 measured, not as a standalone-runnable package — same caveat the E1/E3/E4/E6/E7 Kind/OCP
+drivers already carry for needing a live cluster.
+
 ```bash
-# In-process (no LLM key): E2 + E5 structural
+# In-process (no LLM key): E2 + E5 structural -- needs this repo's workspace (see caveat above)
 docker run -d --rm --name sh-redis -p 6379:6379 redis:7-alpine
 pnpm -C experiments test           # E2, E5 structural, fixtures
-pnpm -C harness test               # checkpoint parity (E3 fidelity), budget unit, etc.
 
-# Cluster (needs Kind+Knative deploy + gateway creds): E1, E3-mobility, E4
-deploy/knative/run-experiments.sh  # setup + E1 + E3 + E4, writes deploy/knative/EXPERIMENTS.md
+# checkpoint parity (E3 fidelity), budget unit, etc. -- in this repo
+pnpm -C harness test
+
+# Cluster (needs Kind+Knative deploy + gateway creds): E1, E3-mobility, E4 -- in moca-experiments,
+# also needs this repo's deploy/knative/*.yaml manifests + setup-ocp.sh/lib.sh (not moved --
+# see this repo's deploy/knative/EXPERIMENTS-MOVED.md, and moca-experiments' own README for
+# the full split rationale)
+knative/run-experiments.sh         # setup + E1 + E3 + E4, writes knative/EXPERIMENTS.md
 ```
 
 ## Conclusion

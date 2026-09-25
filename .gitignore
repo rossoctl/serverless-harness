@@ -3,11 +3,6 @@ dist/
 *.log
 .pi/
 
-# Raw per-run experiment output - EXPERIMENTS.md carries the numbers that
-# matter; the underlying per-VM JSON/log files are throwaway rig artifacts,
-# not evidence to keep in git.
-deploy/microvm/e12-results/
-
 # Secrets and credentials
 .env
 .env.*
@@ -34,20 +29,9 @@ Thumbs.db
 docs/plans/*
 !docs/plans/README.md
 
-# E2 writes each run's measured table here; experiments/RESULTS.md is the committed
-# baseline and is no longer overwritten by a test run (see experiments/README.md).
-experiments/.results/
-
 # Workspace-only checksums. Redundant with each module go.sum, and the checksum
 # database still verifies downloads without it -- one less sum file to keep in sync.
 go.work.sum
 
-# E13 rig diagnostics (deploy/microvm/e13-*.sh) - throwaway rig output, not
-# source, per PR #272's own late fix removing the equivalent e12-results/.
-deploy/microvm/e13-results/
-deploy/microvm/e13-control-results/
-deploy/microvm/e13-telemetry/
-
-# Python bytecode cache - deploy/microvm/tests/e13-correlate.test.sh imports
-# e13-correlate.py, and every run regenerates this.
+# Python bytecode cache -- regenerated on every run wherever a .py file lives.
 __pycache__/

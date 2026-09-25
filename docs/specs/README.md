@@ -202,6 +202,20 @@ so it takes its own prefix rather than a linear `Z` id.
 
 ---
 
+## Repository Re-architecture (`RA`-prefix)
+
+Planning for a phased migration onto the P4/P6 high-density substrate: rename,
+split out an experiments repo, make P4/P6 primary, then **deprecate** (not remove) Kubernetes/
+Knative/KEDA. Its own prefix rather than a `P`-numbered continuation, because — like `RC` and
+`MU` — this is a different _kind_ of track (repository/product structure) than the `P`-track's
+technical density work it depends on and packages for shipment.
+
+| ID      | Title                                                                                                                                                                                                                                                                                                                            | Status                                                                                                                                                        | Spec / issue                                                                                                                           |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **RA1** | **Density cutover & repository re-architecture** — repo rename to **MOCA** (Micro Orchestrator for Cloud Agents), split-out `moca-experiments` repo, P4/P6 made the primary deployment model, then K8s/Knative/KEDA **deprecated in place** (not deleted), elevated sandbox-transport adapter, design-only agent-runtime adapter | **Phase 2 (moca-experiments split) executed 2026-09-25; Phases 1/3/4 remain plan only — execution gated** (§2 of the spec: blocked on #336, #337, #338, #274) | [`2026-09-24-ra1-density-cutover-and-repo-rearchitecture-design.md`](2026-09-24-ra1-density-cutover-and-repo-rearchitecture-design.md) |
+
+---
+
 ## Lineage & supersessions (explicit)
 
 - The parent research doc's **M7–M12** table is **superseded by this registry.** Its M-numbers are

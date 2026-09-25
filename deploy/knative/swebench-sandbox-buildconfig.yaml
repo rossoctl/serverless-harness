@@ -4,7 +4,7 @@
 # Task 3a (this file) is authoring-only: applying this manifest creates the
 # ImageStream/BuildConfig but does NOT trigger a build. Task 3b (controller-
 # driven, live) uploads the Dockerfile emitted by
-# `deploy/knative/build-swebench-sandbox.sh --emit --limit <N>` as a binary
+# `build-swebench-sandbox.sh --emit --limit <N>` (moved to rossoctl/moca-experiments, knative/build-swebench-sandbox.sh, 2026-09-25) as a binary
 # build context via `oc start-build --from-file=<emitted-Dockerfile> -F`.
 #
 # strategy.type=Docker / source.type=Binary: the binary build context IS the

@@ -16,8 +16,8 @@ serverless-harness/
 │   ├── knative-server/   # Knative HTTP entrypoint (@sh/knative-server)
 │   ├── session-backend/  # Redis session storage (@sh/session-backend)
 │   └── work-queue/       # Redis Streams work queue (@sh/work-queue)
-├── experiments/          # Performance experiments (@sh/experiments)
-├── deploy/knative/       # Deployment scripts and smoke tests
+├── deploy/knative/       # Deployment scripts and smoke tests (experiment drivers moved to
+│                         # rossoctl/moca-experiments, 2026-09-25)
 ├── pi-fork/              # Git submodule: Pi AI framework (must be built)
 └── Dockerfile            # Container image (node:22-alpine)
 ```

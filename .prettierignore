@@ -5,7 +5,6 @@ dist/
 pnpm-lock.yaml
 packages/k8s-sandbox/src/gen/
 gen/
-deploy/microvm/e12-results/
 
 # Sibling checkouts of this same repo. `prettier --write .` (make fmt) walks the directory tree
 # and reads only this file -- not .gitignore -- so without these it reformats files belonging to

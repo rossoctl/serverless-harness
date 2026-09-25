@@ -48,7 +48,7 @@ rest.
 | Idle compute billed continuously                    | **Only Redis + sandbox** stay resident (2 pods at rest)               |
 | One invocation model                                | **Four**: sync, async fan-out, scheduled, human-gated                 |
 
-In an idle-heavy workload [experiment](deploy/knative/EXPERIMENTS.md), the serverless path consumed
+In an idle-heavy workload [experiment](https://github.com/rossoctl/moca-experiments/blob/main/knative/EXPERIMENTS.md), the serverless path consumed
 roughly **a quarter** of the pod-seconds of an equivalent always-on agent — because the expensive
 part (the agent process) exists only while a turn is actively running.
 
@@ -286,8 +286,8 @@ serverless-harness/
 │   └── work-queue/        # Redis Streams work queue (async dispatch)
 ├── harness/               # Pi SessionStorageBackend adapter (write-behind) + headless smoke
 ├── pi-fork/               # Pinned Pi coding agent (submodule) with the injectable backend seam
-├── deploy/knative/        # Kind setup, manifests, smoke + experiment drivers
-├── experiments/           # @sh/experiments — reproducible cost/behaviour experiments
+├── deploy/knative/        # Kind setup, manifests, smoke (experiment drivers moved to
+│                          # rossoctl/moca-experiments, 2026-09-25)
 └── docs/specs/            # Design specs (per-milestone) + milestone registry
 ```
 
@@ -297,10 +297,13 @@ serverless-harness/
 
 Behaviour and economics are backed by reproducible experiments rather than claims:
 
-- **[`deploy/knative/EXPERIMENTS.md`](deploy/knative/EXPERIMENTS.md)** — cluster experiments E1
-  (economics), E3 (mobility), E4 (recovery), run live on Kind.
+- **[`moca-experiments/knative/EXPERIMENTS.md`](https://github.com/rossoctl/moca-experiments/blob/main/knative/EXPERIMENTS.md)**
+  — cluster experiments E1 (economics), E3 (mobility), E4 (recovery), run live on Kind. Moved to
+  a separate repo 2026-09-25 (see `docs/specs/2026-09-24-ra1-density-cutover-and-repo-rearchitecture-design.md`).
 - **[`docs/experiment-results.md`](docs/experiment-results.md)** — E2 (reconstruction cost) and E5
-  (budget enforcement) from the `@sh/experiments` workspace.
+  (budget enforcement); the `@sh/experiments` workspace these ran from moved to
+  [`moca-experiments/experiments/`](https://github.com/rossoctl/moca-experiments/tree/main/experiments)
+  on 2026-09-25 (see `docs/specs/2026-09-24-ra1-density-cutover-and-repo-rearchitecture-design.md`).
 - **[`deploy/knative/SMOKE.md`](deploy/knative/SMOKE.md)** — the 6/6 cold-start + resume smoke claims.
 
 ---

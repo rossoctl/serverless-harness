@@ -48,8 +48,8 @@ serverless-harness/
 │   ├── knative-server/   # Knative HTTP server (@sh/knative-server)
 │   ├── session-backend/  # Redis session backend (@sh/session-backend)
 │   └── work-queue/       # Redis work queue (@sh/work-queue)
-├── experiments/          # Performance experiments
-├── deploy/knative/       # Deployment scripts and smoke tests
+├── deploy/knative/       # Deployment scripts and smoke tests (experiment drivers moved to
+│                         # rossoctl/moca-experiments, 2026-09-25)
 ├── pi-fork/              # Submodule: Pi AI framework
 └── Dockerfile            # Container build
 ```
@@ -68,7 +68,7 @@ serverless-harness/
 
 All PRs must pass:
 
-- **Typecheck**: `tsc --noEmit` across harness, k8s-sandbox, knative-server, experiments
+- **Typecheck**: `tsc --noEmit` across harness, k8s-sandbox, knative-server
 - **Tests**: `pnpm -r test` (requires Redis for work-queue)
 - **Lint**: `make lint` -- every pre-commit hook over all files (Prettier, shellcheck,
   hadolint, gitleaks, YAML and whitespace checks)

@@ -17,7 +17,7 @@ export function swebenchVenvDir(sessionId: string): string {
 
 /**
  * SWE-bench per-leaf provisioning inside the shared pool pod (mirrors the merged
- * deploy/knative/measure-swebench-runtimes.sh mechanism — see that file's header for the rationale
+ * measure-swebench-runtimes.sh mechanism (moved to rossoctl/moca-experiments, knative/measure-swebench-runtimes.sh, 2026-09-25) — see that file's header for the rationale
  * behind every choice). Clones the baked bare mirror cross-device (--no-hardlinks: /repos overlay ->
  * /workspace EBS), checks out base_commit, layers a per-leaf system-site venv over the baked conda
  * env, and editable-installs the repo (build-iso fallback). Prints the checkout dir on stdout.
