@@ -26,6 +26,14 @@ export interface RouteSpec {
 export const ROUTES: readonly RouteSpec[] = [
   { method: 'GET', path: '/healthz', auth: 'none', sessionScoped: false, operationId: 'healthz' },
   { method: 'GET', path: '/readyz', auth: 'none', sessionScoped: false, operationId: 'readyz' },
+  // Public by design: a client asks it BEFORE logging in, to learn where the harness is.
+  {
+    method: 'GET',
+    path: '/v1/discovery',
+    auth: 'none',
+    sessionScoped: false,
+    operationId: 'getDiscovery',
+  },
   {
     method: 'POST',
     path: '/v1/auth/device',

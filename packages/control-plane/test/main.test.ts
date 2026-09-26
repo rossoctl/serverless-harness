@@ -64,6 +64,22 @@ describe('configFromEnv', () => {
       sandboxNamespace: 'sandboxes',
     });
   });
+
+  it('advertises SH_PUBLIC_HARNESS_URL without trailing slashes, and nothing when unset', () => {
+    expect(configFromEnv(baseEnv).publicHarnessUrl).toBeUndefined();
+    expect(
+      configFromEnv({ ...baseEnv, SH_PUBLIC_HARNESS_URL: 'https://harness.example.com/' })
+        .publicHarnessUrl,
+    ).toBe('https://harness.example.com');
+  });
+
+  it('refuses to start with a SH_PUBLIC_HARNESS_URL no client could use', () => {
+    for (const bad of ['harness.example.com', 'ftp://harness', 'not a url']) {
+      expect(() => configFromEnv({ ...baseEnv, SH_PUBLIC_HARNESS_URL: bad }), bad).toThrow(
+        /SH_PUBLIC_HARNESS_URL must be an absolute http\(s\) URL/,
+      );
+    }
+  });
 });
 
 describe('verifyKeysFromEnv', () => {

@@ -215,6 +215,13 @@ spec:
             # no deployment has an admin unless one is named.
             - name: SH_ADMIN_SUBJECTS
               value: ''
+            # The harness base URL as a CLIENT reaches it, advertised by GET /v1/discovery so that
+            # mocactl needs only this control plane's URL. It is the client's view, not the in-cluster
+            # one: behind a port-forward it is the local address, e.g.
+            #   kubectl set env deploy/sh-control-plane -n default SH_PUBLIC_HARNESS_URL=http://localhost:18081
+            # Empty advertises none, and mocactl then asks for --harness-url.
+            - name: SH_PUBLIC_HARNESS_URL
+              value: ''
             # Default false (spec §6.4): a deployment does not silently let one subject spend the
             # operator's key. When true, SH_OPERATOR_INFERENCE_TOKEN must also be set.
             - name: SH_ALLOW_OPERATOR_FALLBACK
