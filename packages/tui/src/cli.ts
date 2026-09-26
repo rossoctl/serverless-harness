@@ -25,6 +25,8 @@ export async function main(
     buildRuntime?: typeof buildRuntime;
     startInteractive?: StartInteractive;
     signal?: AbortSignal;
+    /** Whether stdin is a terminal; Ink needs raw mode, so the interactive UI refuses without one. */
+    stdinIsTTY?: boolean;
   } = {},
 ): Promise<number> {
   let parsed;
@@ -96,6 +98,10 @@ export async function main(
     case undefined:
       if (!deps.startInteractive) {
         io.err('interactive mode is not wired yet');
+        return 2;
+      }
+      if (deps.stdinIsTTY === false) {
+        io.err('the interactive UI needs a terminal; for scripts use `sh-tui run "prompt"`');
         return 2;
       }
       return deps.startInteractive(rt, {

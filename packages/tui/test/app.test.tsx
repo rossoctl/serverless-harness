@@ -426,7 +426,8 @@ describe('App', () => {
     const { stdin, all, frame, until, ready } = mount(rt);
     await ready();
     await send(stdin, 'hi');
-    await until(() => frame().includes('Log in with GitHub'));
+    // The fake approves on the first poll, so Login can be gone by the next sample: check every frame.
+    await until(() => all().includes('Log in with GitHub'));
     expect(mints).toBe(1);
     // The device flow completes (pollDeviceAuth approves on the first poll).
     await until(() => all().includes('replayed'));
@@ -454,12 +455,13 @@ describe('App', () => {
       }),
     });
     rt = testRuntime({ cp });
-    const { stdin, frame, until, ready } = mount(rt);
+    const { stdin, all, frame, until, ready } = mount(rt);
     await ready();
     stdin.write(KEY.ctrl('x'));
     await tick();
     stdin.write('l');
-    await until(() => frame().includes('Log in with GitHub'));
+    // Login is transient here (the fake approves on the first poll): check every frame, not the last.
+    await until(() => all().includes('Log in with GitHub'));
     // The device flow approves on the first poll; the Sessions overlay comes back and lists.
     await until(() => frame().includes('remote-1'));
     expect(frame()).toContain('Sessions');

@@ -78,6 +78,20 @@ describe('main', () => {
     expect(start.mock.calls[0][1]).toEqual({ setup: true, noAnimation: false });
   });
 
+  it('refuses the interactive UI without a terminal, pointing at run', async () => {
+    const start = vi.fn((..._args: unknown[]) => Promise.resolve(0));
+    const o = io();
+    expect(
+      await main([], {}, o, {
+        buildRuntime: fakeBuild,
+        startInteractive: start,
+        stdinIsTTY: false,
+      }),
+    ).toBe(2);
+    expect(start).not.toHaveBeenCalled();
+    expect(o.errs.join('\n')).toContain('sh-tui run');
+  });
+
   it('prints the config warning', async () => {
     const o = io();
     const build = () => ({ ...fakeBuild(), configWarning: 'ignoring unreadable x' }) as Runtime;
