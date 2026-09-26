@@ -71,9 +71,15 @@ export interface PutCredentialRequest {
   secret: Record<string, string>;
 }
 
+/** GET /v1/discovery: where the rest of the deployment is, readable before login. */
+export interface Discovery {
+  harnessUrl: string | null;
+}
+
 export interface ControlPlaneApi {
   healthz(): Promise<void>;
   readyz(): Promise<void>;
+  discovery(): Promise<Discovery>;
   startDeviceAuth(): Promise<DeviceStart>;
   pollDeviceAuth(deviceCode: string): Promise<ApiLogin | 'pending'>;
   me(): Promise<Me>;
@@ -95,6 +101,8 @@ export interface StreamTurnArgs {
 }
 
 export interface HarnessApi {
+  /** The base URL turns go to; for a discovered harness this asks the control plane first. */
+  baseUrl(): Promise<string>;
   health(): Promise<void>;
   streamTurn(args: StreamTurnArgs): AsyncGenerator<TurnFrame>;
   probeTrust(token: string, sessionId: string): Promise<'trusted' | 'untrusted'>;

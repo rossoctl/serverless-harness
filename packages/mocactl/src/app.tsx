@@ -64,8 +64,7 @@ export function initialOverlay(
   rt: Runtime,
   opts: InteractiveOptions,
 ): { name: OverlayName } | undefined {
-  if (opts.setup || !rt.endpoints.controlPlaneUrl || !rt.endpoints.harnessUrl)
-    return { name: 'onboarding' };
+  if (opts.setup || !rt.endpoints.controlPlaneUrl) return { name: 'onboarding' };
   if (!apiTokenValid(rt.auth, rt.now())) return { name: 'login' };
   return undefined;
 }
@@ -409,7 +408,7 @@ export function App({ rt, opts, env, os, write }: AppProps) {
   // Abandoned onboarding puts back whatever was last known to work, then exits if that is nothing.
   const cancelOnboarding = () => {
     if (rt.endpoints !== committed.current.endpoints) restoreConnection(rt, committed.current);
-    if (!rt.endpoints.controlPlaneUrl || !rt.endpoints.harnessUrl) return exit();
+    if (!rt.endpoints.controlPlaneUrl) return exit();
     show(initialOverlay(rt, { ...opts, setup: false }));
   };
 

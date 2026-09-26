@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import { ControlPlaneClient } from './api/control-plane.js';
+import { DiscoveringHarness, discoverHarnessUrl } from './api/discovery.js';
 import { HarnessClient } from './api/harness.js';
 import type { ControlPlaneApi, HarnessApi } from './api/types.js';
 import {
@@ -47,12 +48,18 @@ function wireTranscripts(rt: Runtime): void {
 }
 
 // The control-plane client reads rt.auth on every request, so a new login needs no new client.
+// The harness URL is an override; without one the control plane says where the harness is.
 function wire(rt: Runtime): void {
   const { controlPlaneUrl, harnessUrl } = rt.endpoints;
-  rt.cp = controlPlaneUrl
+  const cp = controlPlaneUrl
     ? new ControlPlaneClient(controlPlaneUrl, () => rt.auth?.apiToken, rt.fetchImpl)
     : undefined;
-  rt.harness = harnessUrl ? new HarnessClient(harnessUrl, rt.fetchImpl) : undefined;
+  rt.cp = cp;
+  rt.harness = harnessUrl
+    ? new HarnessClient(harnessUrl, rt.fetchImpl)
+    : cp
+      ? new DiscoveringHarness(() => discoverHarnessUrl(cp), rt.fetchImpl)
+      : undefined;
   wireTranscripts(rt);
 }
 

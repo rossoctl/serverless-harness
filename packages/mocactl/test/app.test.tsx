@@ -133,6 +133,7 @@ describe('App', () => {
       fetchImpl: (async (input: string | URL | Request) => {
         const path = new URL(String(input)).pathname;
         if (path === '/healthz' || path === '/health') return json({ ok: true });
+        if (path === '/v1/discovery') return json({ harnessUrl: 'http://h2/' });
         if (path === '/v1/credentials') return json({ credentials: [credential('anthropic')] });
         return json({ error: 'internal_error' }, 500);
       }) as typeof fetch,
@@ -140,20 +141,18 @@ describe('App', () => {
     // A login already cached for the new control plane, so onboarding skips its login step.
     saveAuth(rt.paths, { ...rt.auth!, controlPlaneUrl: 'http://cp2' });
     const { stdin, frame, until } = mount(rt);
-    await until(() => inputReady(stdin) && frame().includes('Control plane URL'));
+    await until(() => inputReady(stdin) && frame().includes('Server URL'));
     stdin.write('http://cp2');
     await tick();
     stdin.write(KEY.enter);
-    await tick();
-    stdin.write('http://h2/');
-    await tick();
-    stdin.write(KEY.enter);
     await until(() => frame().includes('New session'));
-    expect(loadConfig(rt.paths).config).toMatchObject({
-      controlPlaneUrl: 'http://cp2',
-      harnessUrl: 'http://h2',
-    });
-    expect(rt.endpoints).toEqual({ controlPlaneUrl: 'http://cp2', harnessUrl: 'http://h2' });
+    // Only the URL the user gave is saved: the harness is the control plane's to advertise, so a
+    // moved harness is followed on the next launch instead of pinned in config.json.
+    const saved = loadConfig(rt.paths).config;
+    expect(saved.controlPlaneUrl).toBe('http://cp2');
+    expect(saved.harnessUrl).toBeUndefined();
+    expect(rt.endpoints).toEqual({ controlPlaneUrl: 'http://cp2' });
+    expect(await rt.harness!.baseUrl()).toBe('http://h2');
     // createSession fails (500): the error screen has no input of its own, and Esc still closes it.
     await until(() => frame().includes('unavailable'));
     stdin.write(KEY.escape);
@@ -193,6 +192,7 @@ describe('App', () => {
       fetchImpl: routedFetch({
         '/healthz': () => json({ ok: true }),
         '/health': () => json({ ok: true }),
+        '/v1/discovery': () => json({ harnessUrl: 'http://h2' }),
         '/v1/auth/device': () =>
           json({
             deviceCode: 'd',
@@ -207,12 +207,8 @@ describe('App', () => {
       }),
     });
     const { stdin, frame, until } = mount(rt);
-    await until(() => inputReady(stdin) && frame().includes('Control plane URL'));
+    await until(() => inputReady(stdin) && frame().includes('Server URL'));
     stdin.write('http://cp2/');
-    await tick();
-    stdin.write(KEY.enter);
-    await tick();
-    stdin.write('http://h2');
     await tick();
     stdin.write(KEY.enter);
     await until(() => frame().includes('New session'));
@@ -653,13 +649,11 @@ describe('App', () => {
     const rt = testRuntime({ fetchImpl: routedFetch({ '/healthz': never, '/health': never }) });
     const original = { cp: rt.cp, harness: rt.harness, endpoints: rt.endpoints };
     const { stdin, frame, until } = mount(rt, { setup: true });
-    await until(() => inputReady(stdin) && frame().includes('Control plane URL'));
+    await until(() => inputReady(stdin) && frame().includes('Server URL'));
     stdin.write('2'); // http://cp -> http://cp2
     await tick();
     stdin.write(KEY.enter);
-    await tick();
-    stdin.write(KEY.enter);
-    await until(() => frame().includes('checking both endpoints'));
+    await until(() => frame().includes('connecting'));
     expect(rt.endpoints.controlPlaneUrl).toBe('http://cp2'); // applied in memory for the probe
     await tick();
     stdin.write(KEY.escape);
@@ -676,18 +670,14 @@ describe('App', () => {
     const rt = testRuntime({
       endpoints: {},
       config: { ...testRuntime().config, controlPlaneUrl: undefined, harnessUrl: undefined },
-      fetchImpl: routedFetch({ '/healthz': never, '/health': never }),
+      fetchImpl: routedFetch({ '/healthz': never, '/v1/discovery': never }),
     });
     const { stdin, frame, until } = mount(rt);
-    await until(() => inputReady(stdin) && frame().includes('Control plane URL'));
+    await until(() => inputReady(stdin) && frame().includes('Server URL'));
     stdin.write('http://cp2');
     await tick();
     stdin.write(KEY.enter);
-    await tick();
-    stdin.write('http://h2');
-    await tick();
-    stdin.write(KEY.enter);
-    await until(() => frame().includes('checking both endpoints'));
+    await until(() => frame().includes('connecting'));
     await tick();
     stdin.write(KEY.escape);
     // Exiting unmounts Ink, which stops listening to stdin.
@@ -699,15 +689,14 @@ describe('App', () => {
     const rt = testRuntime({
       endpoints: {},
       config: { ...testRuntime().config, controlPlaneUrl: undefined, harnessUrl: undefined },
-      fetchImpl: routedFetch({ '/healthz': () => json({ ok: true }) }), // /health -> 500
+      fetchImpl: routedFetch({
+        '/healthz': () => json({ ok: true }),
+        '/v1/discovery': () => json({ harnessUrl: 'http://bad-harness' }),
+      }), // /health -> 500
     });
     const { stdin, frame, until } = mount(rt);
-    await until(() => inputReady(stdin) && frame().includes('Control plane URL'));
+    await until(() => inputReady(stdin) && frame().includes('Server URL'));
     stdin.write('http://cp2');
-    await tick();
-    stdin.write(KEY.enter);
-    await tick();
-    stdin.write('http://bad-harness');
     await tick();
     stdin.write(KEY.enter);
     await until(() => frame().includes('harness:'));

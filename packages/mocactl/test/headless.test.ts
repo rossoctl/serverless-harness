@@ -183,7 +183,7 @@ describe('cmdDoctor', () => {
   it('prints the checks and exits 0 when all pass', async () => {
     const o = io();
     expect(await cmdDoctor(runtime(), o, false)).toBe(0);
-    expect(o.stdout.trim().split('\n')).toHaveLength(6);
+    expect(o.stdout.trim().split('\n')).toHaveLength(7);
   });
 
   it('exits 1 and prints JSON on failure with --json', async () => {

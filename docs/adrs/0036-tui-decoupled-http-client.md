@@ -35,8 +35,9 @@ Four forces shape what kind of client this should be:
 We will build **`mocactl`** (`packages/mocactl`, `@sh/mocactl`) as a standalone terminal client that
 communicates **exclusively** over MU1's `/v1` HTTP API. It declares **no `workspace:*` dependency on
 any `@sh/*` package** and makes no assumption about what deployment substrate — Knative today, P6's
-VM/supervisor path once RA1 lands — sits behind either of its two configured URLs (control plane,
-harness). It is built on **Ink/React**, the first TUI framework introduced into this monorepo, and its
+VM/supervisor path once RA1 lands — sits behind the one URL it is given: the control plane's. The
+control plane says where the harness is through a public `GET /v1/discovery` (set by the operator
+with `SH_PUBLIC_HARNESS_URL`); a local `--harness-url` overrides it. It is built on **Ink/React**, the first TUI framework introduced into this monorepo, and its
 interaction model is deliberately modeled on OpenCode's conventions: one persistent chat view with
 session, credential, and login functions as dismissable overlays, each reachable by slash-command,
 leader-key (`ctrl+x` + mnemonic), and a fuzzy command palette (`ctrl+p`), all generated from one
@@ -57,6 +58,10 @@ palette. Its session, auth, and transcript logic lives in a UI-free core shared 
   less actively maintained ecosystem (blessed), or a full layout/input/diffing reimplementation (raw),
   for no benefit over Ink's React-state-to-render mapping, which fits a live SSE frame stream
   naturally.
+- **Two user-supplied URLs (control plane and harness)** — rejected in revision 1.2: users found two
+  addresses for one service confusing. Deriving the harness from the control-plane URL by convention
+  (same origin behind a path-routing proxy) was also rejected, because it would oblige every
+  deployment to run that proxy.
 - **An original, from-scratch UX** — rejected: OpenCode has already solved "what does a good terminal
   coding-agent client feel like." Matching its conventions lowers the learning curve for anyone coming
   from it and avoids re-solving an already-solved interaction-design problem.
@@ -65,8 +70,12 @@ palette. Its session, auth, and transcript logic lives in a UI-free core shared 
 
 - Positive: the client is portable across whatever substrate the harness ends up on without a single
   line changing, because it never assumes anything about what is behind either configured URL.
-- Positive: zero backend changes are required to ship this — MU1 already exposes everything a v1
-  needs (auth, sessions, credentials, SSE turns).
+- Positive: one small backend change ships with it — `GET /v1/discovery` — and everything else a v1
+  needs (auth, sessions, credentials, SSE turns) MU1 already exposes. It buys a one-URL setup, and it
+  is the seam through which the control plane can later place sessions on different harnesses.
+- Negative / accepted cost: an operator must set `SH_PUBLIC_HARNESS_URL` to the harness as a CLIENT
+  reaches it, which is not the in-cluster address; a deployment that sets nothing gets a one-line fix
+  from `mocactl`, not a guess.
 - Positive: users get an already-validated interaction model (OpenCode's) instead of a bespoke one
   they have to learn from scratch.
 - Negative / accepted cost: two things a user might reasonably call "configuring the harness/sandbox"

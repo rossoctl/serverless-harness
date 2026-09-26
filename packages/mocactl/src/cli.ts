@@ -8,7 +8,8 @@ export const USAGE = `usage:
   mocactl login                                  log in with the GitHub device flow
   mocactl doctor [--json]                        check the setup; one fix per failure
   mocactl run "prompt" [--session ID | --new] [--option key=value ...] [--json]
-flags for every command: --control-plane-url URL  --harness-url URL`;
+flags for every command: --control-plane-url URL
+  (the control plane says where the harness is; --harness-url URL overrides that)`;
 
 export interface InteractiveOptions {
   setup: boolean;

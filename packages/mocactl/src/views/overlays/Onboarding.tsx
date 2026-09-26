@@ -10,16 +10,19 @@ import { Spinner } from '../Spinner.js';
 import { CredentialsOverlay } from './Credentials.js';
 import { LoginOverlay } from './Login.js';
 
+/** The one URL onboarding asks for, plus any harness override the user already set. */
+type Chosen = Endpoints & { controlPlaneUrl: string };
+
 interface Props {
   initial: Endpoints;
-  connect: (e: Required<Endpoints>) => { cp: ControlPlaneApi; harness: HarnessApi };
+  connect: (e: Chosen) => { cp: ControlPlaneApi; harness: HarnessApi };
   hasValidLogin: () => boolean;
   loginDeps: () => LoginDeps;
   onLoggedIn: (auth: CachedAuth) => void;
   copy?: (text: string) => void | Promise<void>;
   openUrl?: (url: string) => void;
-  /** Both endpoints answered: the point at which the host may persist them. */
-  onConnected?: (e: Required<Endpoints>) => void;
+  /** The control plane and the harness it points at both answered: the host may persist them. */
+  onConnected?: (e: Chosen) => void;
   onDone: () => void;
   onCancel: () => void;
   /**
@@ -96,11 +99,12 @@ export function OnboardingOverlay({
     }
   };
 
-  const probe = async (e: Required<Endpoints>) => {
+  const probe = async (e: Chosen) => {
     setEndpoints(e);
     setStep({ kind: 'probing' });
     const clients = connect(e);
     setCp(clients.cp);
+    // The harness is found through the control plane (or a local override), before any login.
     const [c, h] = await Promise.allSettled([clients.cp.healthz(), clients.harness.health()]);
     if (!mountedRef.current) return;
     const failures = [
@@ -125,27 +129,17 @@ export function OnboardingOverlay({
       <Text color={t.muted}>1 endpoints · 2 login · 3 credential · 4 first session</Text>
       {step.kind === 'endpoints' ? (
         <Form
-          title="Where are your services?"
+          title="Where is your MOCA server?"
           fields={[
             {
               key: 'controlPlaneUrl',
-              label: 'Control plane URL',
+              label: 'Server URL',
               initial: endpoints.controlPlaneUrl,
-              hint: 'auth, sessions and credentials',
-            },
-            {
-              key: 'harnessUrl',
-              label: 'Harness URL',
-              initial: endpoints.harnessUrl,
-              hint: 'where turns run',
+              hint: 'the control plane — it tells mocactl where everything else is',
             },
           ]}
           validate={(v) =>
-            !isHttpUrl(v.controlPlaneUrl)
-              ? 'the control plane URL must be an http(s) URL'
-              : !isHttpUrl(v.harnessUrl)
-                ? 'the harness URL must be an http(s) URL'
-                : undefined
+            !isHttpUrl(v.controlPlaneUrl) ? 'the server URL must be an http(s) URL' : undefined
           }
           error={step.error}
           onCancel={onCancel}
@@ -154,12 +148,12 @@ export function OnboardingOverlay({
             // this URL, and the next launch looks it up under the one config.json holds.
             void probe({
               controlPlaneUrl: normalizeUrl(v.controlPlaneUrl)!,
-              harnessUrl: normalizeUrl(v.harnessUrl)!,
+              harnessUrl: endpoints.harnessUrl,
             })
           }
         />
       ) : null}
-      {step.kind === 'probing' ? <Spinner label="checking both endpoints" /> : null}
+      {step.kind === 'probing' ? <Spinner label="connecting" /> : null}
       {step.kind === 'checking' ? <Spinner label="looking for an inference credential" /> : null}
       {step.kind === 'login' ? (
         <LoginOverlay

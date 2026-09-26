@@ -13,6 +13,10 @@ export class HarnessClient implements HarnessApi {
     this.base = baseUrl.replace(/\/+$/, '');
   }
 
+  async baseUrl(): Promise<string> {
+    return this.base;
+  }
+
   async health(): Promise<void> {
     let res: Response;
     try {

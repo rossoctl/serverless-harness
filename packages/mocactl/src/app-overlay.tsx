@@ -72,7 +72,7 @@ export function AppOverlay({
           initial={rt.endpoints}
           connect={(e) => {
             // In memory only (reloading the login cached for that control plane); the URLs are
-            // persisted by onConnected, once both endpoints have answered.
+            // persisted by onConnected, once the control plane and its harness have answered.
             applyEndpoints(rt, e);
             return { cp: rt.cp!, harness: rt.harness! };
           }}
@@ -149,7 +149,7 @@ export function AppOverlay({
               cp: rt.cp!,
               harness: rt.harness!,
               controlPlaneUrl: rt.endpoints.controlPlaneUrl!,
-              harnessUrl: rt.endpoints.harnessUrl!,
+              harnessOverridden: rt.endpoints.harnessUrl !== undefined,
               loggedIn: apiTokenValid(rt.auth, rt.now()),
             })
           }

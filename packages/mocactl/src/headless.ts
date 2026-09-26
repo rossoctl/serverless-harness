@@ -11,10 +11,10 @@ export interface Io {
   err(s: string): void;
 }
 
+// Only the control plane is required: it says where the harness is (GET /v1/discovery).
 const MISSING = {
   controlPlaneUrl:
     'missing control-plane URL — pass --control-plane-url or set SH_CONTROL_PLANE_URL',
-  harnessUrl: 'missing harness URL — pass --harness-url or set SH_HARNESS_URL',
 };
 
 function missing(rt: Runtime, io: Io, need: Array<keyof typeof MISSING>): boolean {
@@ -45,12 +45,12 @@ export async function cmdLogin(rt: Runtime, io: Io, signal?: AbortSignal): Promi
 }
 
 export async function cmdDoctor(rt: Runtime, io: Io, json: boolean): Promise<number> {
-  if (missing(rt, io, ['controlPlaneUrl', 'harnessUrl']) || !rt.cp || !rt.harness) return 2;
+  if (missing(rt, io, ['controlPlaneUrl']) || !rt.cp || !rt.harness) return 2;
   const results = await runDiagnostics({
     cp: rt.cp,
     harness: rt.harness,
     controlPlaneUrl: rt.endpoints.controlPlaneUrl!,
-    harnessUrl: rt.endpoints.harnessUrl!,
+    harnessOverridden: rt.endpoints.harnessUrl !== undefined,
     loggedIn: apiTokenValid(rt.auth, rt.now()),
   });
   io.out((json ? JSON.stringify(results) : formatDiagnostics(results)) + '\n');
@@ -66,7 +66,7 @@ export interface RunOptions {
 }
 
 export async function cmdRun(rt: Runtime, io: Io, opts: RunOptions): Promise<number> {
-  if (missing(rt, io, ['controlPlaneUrl', 'harnessUrl']) || !rt.cp || !rt.harness) return 2;
+  if (missing(rt, io, ['controlPlaneUrl']) || !rt.cp || !rt.harness) return 2;
   if (!apiTokenValid(rt.auth, rt.now())) {
     io.err('not logged in — run `mocactl login` first');
     return 2;

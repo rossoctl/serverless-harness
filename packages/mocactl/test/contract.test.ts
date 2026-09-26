@@ -18,6 +18,7 @@ const openapi = parse(readFileSync(new URL('docs/api/openapi.yaml', root), 'utf8
 const USED: Array<{ method: string; path: string; reads?: string[]; sends?: string[] }> = [
   { method: 'get', path: '/healthz' },
   { method: 'get', path: '/readyz' },
+  { method: 'get', path: '/v1/discovery', reads: ['harnessUrl'] },
   {
     method: 'post',
     path: '/v1/auth/device',
@@ -107,6 +108,7 @@ describe('control-plane contract (docs/api/openapi.yaml)', () => {
     const cProxy = new Proxy(c, handler);
     await cProxy.healthz();
     await cProxy.readyz();
+    await cProxy.discovery();
     await cProxy.startDeviceAuth();
     await cProxy.pollDeviceAuth('d');
     await cProxy.me();

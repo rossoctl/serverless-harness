@@ -13,6 +13,7 @@ function setup(
     cp?: ReturnType<typeof fakeControlPlane>;
     harness?: ReturnType<typeof fakeHarness>;
     loggedIn?: boolean;
+    harnessUrl?: string;
   } = {},
 ) {
   const cp =
@@ -23,7 +24,7 @@ function setup(
   const r = render(
     withTheme(
       <OnboardingOverlay
-        initial={{ controlPlaneUrl: 'http://cp', harnessUrl: 'http://h' }}
+        initial={{ controlPlaneUrl: 'http://cp', harnessUrl: over.harnessUrl }}
         connect={connect}
         hasValidLogin={() => over.loggedIn ?? true}
         loginDeps={() => ({ cp, now: () => 0, sleep: waitForAbort })}
@@ -43,20 +44,16 @@ describe('OnboardingOverlay', () => {
     // attaches on its own effect-flush schedule (see test/helpers/ink.ts), so wait for it before
     // the first keystroke.
     await waitFor(
-      () => inputReady(stdin) && (lastFrame() ?? '').includes('Control plane URL'),
+      () => inputReady(stdin) && (lastFrame() ?? '').includes('Server URL'),
       1000,
       lastFrame,
     );
     stdin.write(KEY.enter);
-    await tick();
-    // Same Form instance (Enter on a non-last field only moves focus — no unmount/remount), so
-    // no need to recheck inputReady before the second Enter.
-    stdin.write(KEY.enter);
-    // The second Enter submits, which kicks off an async probe() that connects, health-checks
-    // both endpoints, and then (already logged in, already has an inference credential) calls
-    // onDone() — wait for that outcome rather than a fixed tick.
+    // The one field is the last one, so Enter submits: an async probe() that connects, checks the
+    // control plane and the harness it points at, and then (already logged in, already has an
+    // inference credential) calls onDone() — wait for that outcome rather than a fixed tick.
     await waitFor(() => onDone.mock.calls.length > 0, 1000, lastFrame);
-    expect(connect).toHaveBeenCalledWith({ controlPlaneUrl: 'http://cp', harnessUrl: 'http://h' });
+    expect(connect).toHaveBeenCalledWith({ controlPlaneUrl: 'http://cp', harnessUrl: undefined });
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
@@ -68,12 +65,10 @@ describe('OnboardingOverlay', () => {
     });
     const { stdin, lastFrame, onDone } = setup({ harness });
     await waitFor(
-      () => inputReady(stdin) && (lastFrame() ?? '').includes('Control plane URL'),
+      () => inputReady(stdin) && (lastFrame() ?? '').includes('Server URL'),
       1000,
       lastFrame,
     );
-    stdin.write(KEY.enter);
-    await tick();
     stdin.write(KEY.enter);
     // probe() fails, so the overlay unmounts the Form (probing step) and remounts a fresh one
     // (back to the endpoints step) with the error — wait for that text rather than a fixed tick.
@@ -83,13 +78,60 @@ describe('OnboardingOverlay', () => {
       lastFrame,
     );
     expect(onDone).not.toHaveBeenCalled();
-    expect(lastFrame()).toContain('Control plane URL');
+    expect(lastFrame()).toContain('Server URL');
+  });
+
+  it('asks only for the server URL', async () => {
+    const { stdin, lastFrame } = setup();
+    await waitFor(
+      () => inputReady(stdin) && (lastFrame() ?? '').includes('Server URL'),
+      1000,
+      lastFrame,
+    );
+    expect(lastFrame()).not.toContain('Harness URL');
+  });
+
+  it('carries a harness override the user already set through to connect, unasked', async () => {
+    const { stdin, lastFrame, connect, onDone } = setup({ harnessUrl: 'http://override' });
+    await waitFor(
+      () => inputReady(stdin) && (lastFrame() ?? '').includes('Server URL'),
+      1000,
+      lastFrame,
+    );
+    stdin.write(KEY.enter);
+    await waitFor(() => onDone.mock.calls.length > 0, 1000, lastFrame);
+    expect(connect).toHaveBeenCalledWith({
+      controlPlaneUrl: 'http://cp',
+      harnessUrl: 'http://override',
+    });
+  });
+
+  it('shows discovery`s own fix when the control plane advertises no harness', async () => {
+    const harness = fakeHarness([], {
+      health: async () => {
+        throw new ApiError(
+          'control-plane',
+          404,
+          'harness_unadvertised',
+          'the control plane advertises no harness URL — its operator must set SH_PUBLIC_HARNESS_URL, or pass --harness-url',
+        );
+      },
+    });
+    const { stdin, lastFrame, onDone } = setup({ harness });
+    await waitFor(
+      () => inputReady(stdin) && (lastFrame() ?? '').includes('Server URL'),
+      1000,
+      lastFrame,
+    );
+    stdin.write(KEY.enter);
+    await waitFor(() => (lastFrame() ?? '').includes('SH_PUBLIC_HARNESS_URL'), 1000, lastFrame);
+    expect(onDone).not.toHaveBeenCalled();
   });
 
   it('rejects a URL that does not parse', async () => {
     const { stdin, lastFrame, connect } = setup();
     await waitFor(
-      () => inputReady(stdin) && (lastFrame() ?? '').includes('Control plane URL'),
+      () => inputReady(stdin) && (lastFrame() ?? '').includes('Server URL'),
       1000,
       lastFrame,
     );
@@ -99,7 +141,6 @@ describe('OnboardingOverlay', () => {
     for (let i = 0; i < 20; i++) stdin.write(KEY.backspace);
     stdin.write('not a url');
     stdin.write(KEY.enter);
-    stdin.write(KEY.enter);
     await tick();
     expect(connect).not.toHaveBeenCalled();
     expect(lastFrame()).toContain('must be an http(s) URL');
@@ -108,12 +149,10 @@ describe('OnboardingOverlay', () => {
   it('goes to login when there is no valid login', async () => {
     const { stdin, lastFrame } = setup({ loggedIn: false });
     await waitFor(
-      () => inputReady(stdin) && (lastFrame() ?? '').includes('Control plane URL'),
+      () => inputReady(stdin) && (lastFrame() ?? '').includes('Server URL'),
       1000,
       lastFrame,
     );
-    stdin.write(KEY.enter);
-    await tick();
     stdin.write(KEY.enter);
     // probe() succeeds but hasValidLogin() is false, so the overlay swaps in a freshly-mounted
     // LoginOverlay, which itself starts an async device-auth request — wait for its rendered code.
@@ -124,12 +163,10 @@ describe('OnboardingOverlay', () => {
   it('goes to the credential form when there is no inference credential', async () => {
     const { stdin, lastFrame, onDone } = setup({ cp: fakeControlPlane() });
     await waitFor(
-      () => inputReady(stdin) && (lastFrame() ?? '').includes('Control plane URL'),
+      () => inputReady(stdin) && (lastFrame() ?? '').includes('Server URL'),
       1000,
       lastFrame,
     );
-    stdin.write(KEY.enter);
-    await tick();
     stdin.write(KEY.enter);
     // probe() succeeds, already logged in, but listCredentials() (default fakeControlPlane
     // resolves []) has no inference credential — the overlay swaps in a freshly-mounted

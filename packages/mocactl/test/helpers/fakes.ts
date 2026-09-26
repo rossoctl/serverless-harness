@@ -29,6 +29,7 @@ export function fakeControlPlane(
   const defaults: ControlPlaneApi = {
     healthz: async () => undefined,
     readyz: async () => undefined,
+    discovery: async () => ({ harnessUrl: 'http://h' }),
     startDeviceAuth: async () => ({
       deviceCode: 'd',
       userCode: 'ABCD-1234',
@@ -91,6 +92,7 @@ export function fakeHarness(
   const queue = [...steps];
   return {
     turns,
+    baseUrl: async () => 'http://h',
     health: async () => undefined,
     probeTrust: async () => 'trusted',
     async *streamTurn(args: StreamTurnArgs) {

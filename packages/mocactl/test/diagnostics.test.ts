@@ -12,16 +12,16 @@ const deps = (over: Partial<DiagnosticsDeps> = {}): DiagnosticsDeps => ({
   cp: fakeControlPlane({ listCredentials: async () => [credential('anthropic')] }),
   harness: fakeHarness([]),
   controlPlaneUrl: 'http://cp',
-  harnessUrl: 'http://h',
+  harnessOverridden: false,
   loggedIn: true,
   ...over,
 });
 
 describe('runDiagnostics', () => {
-  it('passes all six checks on a healthy setup and deletes the scratch session', async () => {
+  it('passes all seven checks on a healthy setup and deletes the scratch session', async () => {
     const d = deps();
     const results = await runDiagnostics(d);
-    expect(results.map((r) => r.status)).toEqual(Array(6).fill('pass'));
+    expect(results.map((r) => r.status)).toEqual(Array(7).fill('pass'));
     expect(results.map((r) => r.name)).toEqual([...DIAGNOSTIC_NAMES]);
     const calls = (d.cp as unknown as { calls: string[] }).calls;
     expect(calls).toContain('createSession');
@@ -64,7 +64,7 @@ describe('runDiagnostics', () => {
   it('reports an untrusted harness with the settings it needs, and still cleans up', async () => {
     const d = deps({ harness: fakeHarness([], { probeTrust: async () => 'untrusted' }) });
     const results = await runDiagnostics(d);
-    expect(results.at(-1)).toMatchObject({ id: 6, status: 'fail' });
+    expect(results.at(-1)).toMatchObject({ id: 7, status: 'fail' });
     expect(results.at(-1)!.fix).toContain('SH_SESSION_TOKEN_PUBLIC_KEYS');
     expect((d.cp as unknown as { calls: string[] }).calls).toContain('deleteSession');
   });
@@ -78,8 +78,62 @@ describe('runDiagnostics', () => {
       }),
     });
     const results = await runDiagnostics(d);
-    expect(results.at(-1)).toMatchObject({ id: 6, status: 'fail', detail: 'boom' });
+    expect(results.at(-1)).toMatchObject({ id: 7, status: 'fail', detail: 'boom' });
     expect((d.cp as unknown as { calls: string[] }).calls).toContain('deleteSession');
+  });
+});
+
+describe('harness location', () => {
+  it('says where the harness was found, and that the control plane advertised it', async () => {
+    const results = await runDiagnostics(deps());
+    expect(results[4]).toMatchObject({
+      id: 5,
+      name: 'harness located',
+      status: 'pass',
+      detail: 'http://h (advertised by the control plane)',
+    });
+  });
+
+  it('labels a local override as one', async () => {
+    const results = await runDiagnostics(deps({ harnessOverridden: true }));
+    expect(results[4]!.detail).toBe('http://h (local override)');
+  });
+
+  it('stops at check 5 with discovery`s own fix when the harness cannot be located', async () => {
+    const harness = fakeHarness([], {
+      baseUrl: async () => {
+        throw new ApiError(
+          'control-plane',
+          404,
+          'harness_unadvertised',
+          'set SH_PUBLIC_HARNESS_URL',
+        );
+      },
+    });
+    const results = await runDiagnostics(deps({ harness }));
+    expect(results).toHaveLength(5);
+    expect(results.at(-1)).toMatchObject({
+      id: 5,
+      status: 'fail',
+      fix: 'set SH_PUBLIC_HARNESS_URL',
+    });
+  });
+
+  it('points an unreachable advertised harness at the control plane`s setting', async () => {
+    const harness = fakeHarness([], {
+      health: async () => {
+        throw new ApiError('harness', 0, 'network_error', 'ECONNREFUSED');
+      },
+    });
+    const results = await runDiagnostics(deps({ harness }));
+    expect(results.at(-1)).toMatchObject({ id: 6, status: 'fail' });
+    expect(results.at(-1)!.fix).toBe(
+      'cannot reach the harness at http://h — check SH_PUBLIC_HARNESS_URL on the control plane, or pass --harness-url',
+    );
+    const overridden = await runDiagnostics(deps({ harness, harnessOverridden: true }));
+    expect(overridden.at(-1)!.fix).toBe(
+      'cannot reach the harness at http://h — check --harness-url',
+    );
   });
 });
 
@@ -91,5 +145,13 @@ describe('formatDiagnostics', () => {
         { id: 2, name: 'control plane ready', status: 'fail', fix: 'start Redis' },
       ]),
     ).toBe('✓ 1 control plane reachable\n✗ 2 control plane ready — start Redis');
+  });
+
+  it('appends what a passing check found', () => {
+    expect(
+      formatDiagnostics([
+        { id: 5, name: 'harness located', status: 'pass', detail: 'http://h (local override)' },
+      ]),
+    ).toBe('✓ 5 harness located — http://h (local override)');
   });
 });

@@ -6,6 +6,7 @@ import type {
   CreatedSession,
   CredentialDescriptor,
   DeviceStart,
+  Discovery,
   Me,
   PutCredentialRequest,
   SessionPage,
@@ -69,6 +70,10 @@ export class ControlPlaneClient implements ControlPlaneApi {
 
   async readyz(): Promise<void> {
     await this.request('GET', '/readyz', { auth: false });
+  }
+
+  discovery(): Promise<Discovery> {
+    return this.json('GET', '/v1/discovery', { auth: false });
   }
 
   startDeviceAuth(): Promise<DeviceStart> {

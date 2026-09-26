@@ -1,13 +1,14 @@
 # `mocactl` — A Terminal Client for the MU1 Control Plane — Design
 
-Version: 1.1 — September 25, 2026 (revised same day after a UX/extensibility review — see §0)
+Version: 1.2 — September 26, 2026 (v1.1: a UX/extensibility review; v1.2: one URL — see §0)
 Status: Proposed
 Naming: MOCA is the new name of serverless-harness, so the client is `mocactl` (it was drafted as `sh-tui`).
 Scope: A new, standalone terminal UI — `packages/mocactl` (`@sh/mocactl`), binary `mocactl` — that logs a user
 in against the MU1 control plane, lets them manage their own sessions and inference credentials, and
 drives interactive turns against the harness over SSE. It talks **exclusively** over the `/v1` HTTP
-contract already shipped in `packages/control-plane` and `packages/knative-server`. **No backend
-changes are made or required by this spec.** UX is modeled on OpenCode's TUI conventions: one
+contract already shipped in `packages/control-plane` and `packages/knative-server`, plus **one small
+backend addition** (v1.2): a public `GET /v1/discovery` on the control plane that says where the
+harness is, so a user configures one URL. UX is modeled on OpenCode's TUI conventions: one
 persistent chat view, secondary functions as dismissable overlays, a leader-key + slash-command +
 fuzzy-palette input model, per-tool rich rendering, and a themeable color-token layer.
 Milestone: unassigned — see §13.
@@ -21,13 +22,26 @@ Decision record: [ADR-0036](../adrs/0036-tui-decoupled-http-client.md).
 
 > **The one-sentence thesis.** Everything this TUI needs already exists over HTTP — login, owned
 > sessions, credential management, streaming turns — so the whole of this design is a terminal
-> client and nothing else: zero backend changes, zero runtime dependency on any `@sh/*` package, zero
-> assumption about what runs behind either URL it is given, and a first streamed token within a
-> minute of first launch.
+> client and nothing else: one discovery route as the only backend change, zero runtime dependency on
+> any `@sh/*` package, zero assumption about what runs behind the one URL it is given, and a first
+> streamed token within a minute of first launch.
 
 ---
 
-## 0. Revision 1.1 — what changed and why
+## 0. Revisions — what changed and why
+
+**Revision 1.2 — one URL.** Two URLs for one service was the setup step users found confusing. The
+control plane now advertises the harness's client-facing base URL at a public
+`GET /v1/discovery` → `{ "harnessUrl": string | null }`, set by the operator with
+`SH_PUBLIC_HARNESS_URL` (validated at startup). `mocactl` asks for one URL — the control plane's
+(§3.2) — and finds the harness through it on first use. `--harness-url` / `SH_HARNESS_URL` remain as
+a local override, which is never persisted by onboarding and which disables discovery. A 404 (a
+control plane that predates the route) and `null` (one whose operator set nothing) fail with
+different one-line fixes; the advertised value is used only as the URL parser serialises it. Doctor
+gains a "harness located" check (§6.9). Discovery is also the seam for P6 fan-out: the same
+answer can later come back per session.
+
+**Revision 1.1.**
 
 A review of v1.0 against the code found one gap that would have made the client feel broken, one
 claim that was wrong, and a set of UX and extensibility improvements. All are incorporated:
@@ -61,7 +75,7 @@ claim that was wrong, and a set of UX and extensibility improvements. All are in
 Give a user a fast, OpenCode-quality terminal experience for the harness: log in once, create or
 resume sessions with their history intact, watch turns stream live with readable tool activity, and
 manage the named inference credentials a session runs on — without ever touching `kubectl`, a YAML
-manifest, or a `curl` command. **Success is measurable**: a new user with two URLs reaches their first
+manifest, or a `curl` command. **Success is measurable**: a new user with one URL reaches their first
 streamed token in under a minute, and every setup failure ends in a one-line instruction rather than
 an opaque error.
 
@@ -214,14 +228,16 @@ honest by the contract test (§7.4), not by sharing a module.
 
 ### 3.2 Configuration
 
-Two generically named endpoints — nothing names Knative or Kubernetes, per §2.7:
+One URL, generically named — nothing names Knative or Kubernetes, per §2.7. The control plane is
+the only address a user gives; it says where the harness is (`GET /v1/discovery`, v1.2):
 
-| Flag                  | Env                    | Meaning                     |
-| --------------------- | ---------------------- | --------------------------- |
-| `--control-plane-url` | `SH_CONTROL_PLANE_URL` | auth, sessions, credentials |
-| `--harness-url`       | `SH_HARNESS_URL`       | `POST /turn`                |
+| Flag                  | Env                    | Meaning                                                    |
+| --------------------- | ---------------------- | ---------------------------------------------------------- |
+| `--control-plane-url` | `SH_CONTROL_PLANE_URL` | the server: auth, sessions, credentials, and discovery     |
+| `--harness-url`       | `SH_HARNESS_URL`       | optional override of the discovered harness (`POST /turn`) |
 
-Precedence: flag > env > `config.json` (§6.7). Onboarding (§6.8) writes `config.json` on first run, so
+Precedence: flag > env > `config.json` (§6.7). A discovered harness URL is never written to
+`config.json`, so a harness the operator moves is followed on the next launch. Onboarding (§6.8) writes `config.json` on first run, so
 day-to-day invocation is plain `mocactl`.
 
 ---
@@ -454,9 +470,9 @@ expiresAt }`. The only secret-shaped data stored, and a 1-hour capability, never
 
 When no `config.json` exists, `mocactl` opens an onboarding overlay rather than an error:
 
-1. **Endpoints** — ask for the control-plane and harness URLs (prefilled from env if set); probe
-   `GET /healthz` on the control plane and the harness's health route live, with a check or a
-   one-line reason beside each.
+1. **Server** — ask for the one server (control-plane) URL (prefilled from env if set); probe
+   `GET /healthz` on it and, through discovery (or an existing override), the harness's health route,
+   with a one-line reason for each failure. Discovery is public, so this runs before login.
 2. **Login** — the device flow (§4).
 3. **Credential** — if `GET /v1/credentials` has no inference credential, the add form (§6.4), with
    copy explaining what an inference credential is and where its endpoint comes from.
@@ -477,10 +493,11 @@ first failure, each with a single fix line:
 | 2   | control plane ready (`/readyz`)                                                        | "control plane is up but its session store is down"                                                                                                        |
 | 3   | logged in (`GET /v1/me`)                                                               | "not logged in — run `mocactl` to log in"                                                                                                                  |
 | 4   | inference credential present                                                           | "no inference credential — add one with /credentials"                                                                                                      |
-| 5   | harness reachable (health route)                                                       | "cannot reach harness at URL — check `--harness-url`"                                                                                                      |
-| 6   | harness accepts a freshly minted session token (a scratch session, deleted afterwards) | "harness does not trust this control plane's tokens — the harness needs `SH_SESSION_TOKEN_PUBLIC_KEYS` (and, on the VM path, the other MU1 auth settings)" |
+| 5   | harness located (`GET /v1/discovery`, or the local override)                           | "the control plane advertises no harness URL — its operator must set `SH_PUBLIC_HARNESS_URL`, or pass `--harness-url`"                                     |
+| 6   | harness reachable (health route)                                                       | "cannot reach harness at URL — check `SH_PUBLIC_HARNESS_URL` on the control plane" (or `--harness-url` when overridden)                                    |
+| 7   | harness accepts a freshly minted session token (a scratch session, deleted afterwards) | "harness does not trust this control plane's tokens — the harness needs `SH_SESSION_TOKEN_PUBLIC_KEYS` (and, on the VM path, the other MU1 auth settings)" |
 
-Check 6 is what turns §2.7's P6 gap from a silent login loop into a precise operator instruction.
+Check 7 is what turns §2.7's P6 gap from a silent login loop into a precise operator instruction.
 `doctor` exits non-zero on failure and supports `--json`, so it doubles as a scripted health gate.
 
 ---
@@ -691,7 +708,8 @@ In priority order for the client's experience:
 - **Internal consistency:** §0 lists every v1.1 change and each maps to a section; §1's out-of-scope,
   §11's YAGNI, and §13's owed work agree; §8.2, §6.9 and §12.2 agree that the P6 auth gap is
   detectable.
-- **Scope:** one new package, no backend changes; §10 orders delivery without cutting scope.
+- **Scope:** one new package and one public discovery route (v1.2); §10 orders delivery without
+  cutting scope.
 - **Ambiguity:** library choices for Markdown and highlighting are deliberately left to implementation
   behind `render/markdown.ts`; the only open non-technical call is track assignment (§13.6).
 

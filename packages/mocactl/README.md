@@ -13,9 +13,14 @@ node packages/mocactl/bin/mocactl.mjs            # interactive; the first run wa
 node packages/mocactl/bin/mocactl.mjs --setup    # re-run setup on a configured machine
 ```
 
-Endpoints come from `--control-plane-url` / `--harness-url`, then `SH_CONTROL_PLANE_URL` /
-`SH_HARNESS_URL`, then the saved config. Onboarding checks both endpoints before saving them —
-nothing is written to disk until the control plane and the harness both answer.
+`mocactl` needs one URL: the server's (the control plane). It comes from `--control-plane-url`, then
+`SH_CONTROL_PLANE_URL`, then the saved config. The control plane says where the harness is
+(`GET /v1/discovery`, set by its operator with `SH_PUBLIC_HARNESS_URL`), so there is nothing else to
+configure. Onboarding checks the control plane and the harness it points at before saving the URL —
+nothing is written to disk until both answer.
+
+`--harness-url` / `SH_HARNESS_URL` override discovery (e.g. a harness behind a local port-forward);
+onboarding never saves a discovered harness URL, so a harness the operator moves is followed.
 
 ## Keys
 
@@ -44,7 +49,7 @@ keys in `config.json` under `keybinds`, e.g. `{ "session.new": "ctrl+x s" }`.
 
 ```bash
 mocactl login                               # device-flow login, prints the code
-mocactl doctor [--json]                     # six checks, one fix per failure; exit 1 on failure
+mocactl doctor [--json]                     # seven checks, one fix per failure; exit 1 on failure
 mocactl run "prompt" [--session ID | --new] [--option inferenceCredential=NAME] [--json]
 ```
 
@@ -65,7 +70,13 @@ Falls back to `~/.config/mocactl/` and `~/.local/state/mocactl/` when the `XDG_*
 
 ## Troubleshooting
 
-Run `mocactl doctor`. If it reports that the harness does not trust this control plane, the harness
+Run `mocactl doctor`. Its "harness located" line says where the harness was found and how. If the
+control plane advertises none, its operator sets `SH_PUBLIC_HARNESS_URL` to the harness as clients
+reach it (not the in-cluster address; behind a port-forward, the local one), e.g.
+`kubectl set env deploy/sh-control-plane SH_PUBLIC_HARNESS_URL=http://localhost:18081`. A control
+plane older than `/v1/discovery` needs upgrading, or `--harness-url` in the meantime.
+
+If it reports that the harness does not trust this control plane, the harness
 must be given `SH_SESSION_TOKEN_PUBLIC_KEYS`, `SH_CONTROL_PLANE_URL`, `SH_EXCHANGE_TOKEN` and
 `SH_REQUIRE_AUTH`: on the VM/P6 path, add them to `/etc/serverless-harness/supervisor.env` (the
 `EnvironmentFile` of `deploy/vm/systemd/sh-supervisor.service` — the shipped

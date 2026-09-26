@@ -1,10 +1,12 @@
 import type { ControlPlaneApi, HarnessApi } from '../api/types.js';
+import { describeError } from './messages.js';
 
 export interface CheckResult {
   id: number;
   name: string;
   status: 'pass' | 'fail';
   fix?: string;
+  /** On a failure, the underlying error; on a pass, what was found (only some checks). */
   detail?: string;
 }
 
@@ -12,7 +14,8 @@ export interface DiagnosticsDeps {
   cp: ControlPlaneApi;
   harness: HarnessApi;
   controlPlaneUrl: string;
-  harnessUrl: string;
+  /** True when a local --harness-url / SH_HARNESS_URL / config value replaces discovery. */
+  harnessOverridden: boolean;
   loggedIn: boolean;
 }
 
@@ -21,6 +24,7 @@ export const DIAGNOSTIC_NAMES = [
   'control plane ready',
   'logged in',
   'inference credential present',
+  'harness located',
   'harness reachable',
   'harness trusts this control plane',
 ] as const;
@@ -31,7 +35,11 @@ const MU1_HARNESS_SETTINGS =
 /** Spec §6.9: dependency-ordered checks, each failure ending in one line saying what to do. */
 export async function runDiagnostics(deps: DiagnosticsDeps): Promise<CheckResult[]> {
   let credential: string | undefined;
-  const checks: Array<{ run: () => Promise<void>; fix: string }> = [
+  let harnessUrl: string | undefined;
+  const checks: Array<{
+    run: () => Promise<string | void>;
+    fix: string | ((err: unknown) => string);
+  }> = [
     {
       run: () => deps.cp.healthz(),
       fix: `cannot reach the control plane at ${deps.controlPlaneUrl} — check --control-plane-url`,
@@ -57,8 +65,20 @@ export async function runDiagnostics(deps: DiagnosticsDeps): Promise<CheckResult
       fix: 'no inference credential — add one with /credentials',
     },
     {
+      run: async () => {
+        harnessUrl = await deps.harness.baseUrl();
+        return `${harnessUrl} (${deps.harnessOverridden ? 'local override' : 'advertised by the control plane'})`;
+      },
+      // Discovery's own errors already name their fix (the operator's setting, or the override).
+      fix: (err) => describeError(err),
+    },
+    {
       run: () => deps.harness.health(),
-      fix: `cannot reach the harness at ${deps.harnessUrl} — check --harness-url`,
+      fix: () =>
+        `cannot reach the harness at ${harnessUrl} — ` +
+        (deps.harnessOverridden
+          ? 'check --harness-url'
+          : 'check SH_PUBLIC_HARNESS_URL on the control plane, or pass --harness-url'),
     },
     {
       // A scratch session, because a session token must name one. The probe never runs a model
@@ -81,13 +101,15 @@ export async function runDiagnostics(deps: DiagnosticsDeps): Promise<CheckResult
   for (const [i, check] of checks.entries()) {
     const base = { id: i + 1, name: DIAGNOSTIC_NAMES[i] };
     try {
-      await check.run();
-      results.push({ ...base, status: 'pass' });
+      const found = await check.run();
+      results.push(
+        found ? { ...base, status: 'pass', detail: found } : { ...base, status: 'pass' },
+      );
     } catch (err) {
       results.push({
         ...base,
         status: 'fail',
-        fix: check.fix,
+        fix: typeof check.fix === 'string' ? check.fix : check.fix(err),
         detail: err instanceof Error ? err.message : String(err),
       });
       break;
@@ -98,6 +120,10 @@ export async function runDiagnostics(deps: DiagnosticsDeps): Promise<CheckResult
 
 export function formatDiagnostics(results: CheckResult[]): string {
   return results
-    .map((r) => (r.status === 'pass' ? `✓ ${r.id} ${r.name}` : `✗ ${r.id} ${r.name} — ${r.fix}`))
+    .map((r) =>
+      r.status === 'pass'
+        ? `✓ ${r.id} ${r.name}${r.detail ? ` — ${r.detail}` : ''}`
+        : `✗ ${r.id} ${r.name} — ${r.fix}`,
+    )
     .join('\n');
 }
