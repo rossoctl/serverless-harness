@@ -20,7 +20,7 @@ credentials.*
 # component source file too, since it has no secret material — the credential model is
 # write-only end to end. See src/views/overlays/Sessions.tsx, NewSession.tsx, Login.tsx for
 # the sibling naming convention this file follows.
-!packages/tui/src/views/overlays/Credentials.tsx
+!packages/mocactl/src/views/overlays/Credentials.tsx
 secrets.*
 *kubeconfig*
 

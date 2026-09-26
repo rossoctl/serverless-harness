@@ -15,7 +15,7 @@ serverless-harness/
 │   ├── k8s-sandbox/      # K8s pod exec client (@sh/k8s-sandbox)
 │   ├── knative-server/   # Knative HTTP entrypoint (@sh/knative-server)
 │   ├── session-backend/  # Redis session storage (@sh/session-backend)
-│   ├── tui/              # Terminal client for the control plane (@sh/tui, bin sh-tui)
+│   ├── mocactl/          # MOCA terminal client for the control plane (@sh/mocactl)
 │   └── work-queue/       # Redis Streams work queue (@sh/work-queue)
 ├── experiments/          # Performance experiments (@sh/experiments)
 ├── deploy/knative/       # Deployment scripts and smoke tests

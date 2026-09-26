@@ -1,9 +1,9 @@
-# ADR-0036: `sh-tui` is a standalone HTTP client of MU1, not a harness/control-plane feature
+# ADR-0036: `mocactl` is a standalone HTTP client of MU1, not a harness/control-plane feature
 
 - **Status:** Proposed <!-- Proposed → Accepted → Superseded by ADR-NNNN / Deprecated -->
 - **Date:** 2026-09-25
 - **Deciders:** Serverless Harness team
-- **Spec:** [`../specs/2026-09-25-sh-tui-control-plane-client-design.md`](../specs/2026-09-25-sh-tui-control-plane-client-design.md)
+- **Spec:** [`../specs/2026-09-25-mocactl-control-plane-client-design.md`](../specs/2026-09-25-mocactl-control-plane-client-design.md)
 
 ## Context
 
@@ -32,7 +32,7 @@ Four forces shape what kind of client this should be:
 
 ## Decision
 
-We will build **`sh-tui`** (`packages/tui`, `@sh/tui`) as a standalone terminal client that
+We will build **`mocactl`** (`packages/mocactl`, `@sh/mocactl`) as a standalone terminal client that
 communicates **exclusively** over MU1's `/v1` HTTP API. It declares **no `workspace:*` dependency on
 any `@sh/*` package** and makes no assumption about what deployment substrate — Knative today, P6's
 VM/supervisor path once RA1 lands — sits behind either of its two configured URLs (control plane,
@@ -43,7 +43,7 @@ leader-key (`ctrl+x` + mnemonic), and a fuzzy command palette (`ctrl+p`), all ge
 data-driven command table; per-tool rich rendering (including an `edit` diff built from arguments
 already on the wire); and a centralized theme-token layer whose default maps onto the terminal's own
 palette. Its session, auth, and transcript logic lives in a UI-free core shared with a headless
-`sh-tui run` and a `sh-tui doctor`.
+`mocactl run` and a `mocactl doctor`.
 
 ### Alternatives considered
 
@@ -77,7 +77,7 @@ palette. Its session, auth, and transcript logic lives in a UI-free core shared 
   deployment's operator to add MU1's auth env vars first — verified absent from
   `deploy/vm/env/supervisor.env.example` today. The client cannot fix that, but it detects it: a
   harness that rejects a freshly minted session token is diagnosed as "does not trust this control
-  plane" (and by `sh-tui doctor`) rather than looping the user through re-login.
+  plane" (and by `mocactl doctor`) rather than looping the user through re-login.
 - Negative / accepted cost: no route returns a session's messages, so resume-with-history is served
   from a **local, per-subject transcript store**. Resuming a session started on another machine shows
   no history (the model's context is intact server-side; only the display is missing).
