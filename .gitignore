@@ -16,6 +16,11 @@ deploy/microvm/e12-results/
 *.pem
 *.p12
 credentials.*
+# core.ignorecase (default on macOS/APFS) makes the pattern above match this legitimate
+# component source file too, since it has no secret material — the credential model is
+# write-only end to end. See src/views/overlays/Sessions.tsx, NewSession.tsx, Login.tsx for
+# the sibling naming convention this file follows.
+!packages/mocactl/src/views/overlays/Credentials.tsx
 secrets.*
 *kubeconfig*
 

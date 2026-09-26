@@ -26,6 +26,11 @@ export interface CpConfig {
   /** Placeholder mode wins whenever the deployment has an injector (spec §3.6). */
   injectorConfigured: boolean;
   sandboxNamespace: string;
+  /**
+   * The harness base URL as a CLIENT reaches it, advertised by GET /v1/discovery so a client needs
+   * only this control plane's URL. Unset means the deployment advertises none.
+   */
+  publicHarnessUrl?: string;
 }
 
 export interface CpDeps {
@@ -160,6 +165,13 @@ async function sessionView(rec: SessionRecord, deps: CpDeps) {
 
 export const HANDLERS: Record<string, Handler> = {
   healthz: async () => ({ status: 200, body: 'ok' }),
+
+  // `null`, not a 404, when unset: the client can tell "this deployment advertises no harness" from
+  // "this control plane predates discovery" and name the right fix for each.
+  getDiscovery: async (_ctx, deps) => ({
+    status: 200,
+    body: { harnessUrl: deps.config.publicHarnessUrl ?? null },
+  }),
 
   startDeviceAuth: async (_ctx, deps) => ({
     status: 200,

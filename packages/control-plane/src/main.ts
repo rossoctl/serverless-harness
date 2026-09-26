@@ -26,6 +26,24 @@ function intEnv(env: NodeJS.ProcessEnv, name: string, def: number): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : def;
 }
 
+/**
+ * An optional absolute http(s) URL, trailing slashes dropped. A malformed value fails STARTUP: a
+ * control plane advertising a harness URL no client can use would fail every user's first turn.
+ */
+function urlEnv(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const v = env[name];
+  if (!v) return undefined;
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    throw new Error(`${name} must be an absolute http(s) URL, got "${v}"`);
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:')
+    throw new Error(`${name} must be an absolute http(s) URL, got "${v}"`);
+  return v.replace(/\/+$/, '');
+}
+
 export function portFromEnv(env: NodeJS.ProcessEnv): number {
   return intEnv(env, 'SH_CONTROL_PLANE_PORT', 8080);
 }
@@ -46,6 +64,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv): CpConfig {
     allowOperatorFallback: env.SH_ALLOW_OPERATOR_FALLBACK === 'true',
     injectorConfigured: env.SH_INJECTOR_CONFIGURED === 'true',
     sandboxNamespace: env.SH_SANDBOX_NAMESPACE || 'default',
+    publicHarnessUrl: urlEnv(env, 'SH_PUBLIC_HARNESS_URL'),
   };
 }
 

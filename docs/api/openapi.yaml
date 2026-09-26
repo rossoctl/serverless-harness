@@ -166,6 +166,28 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+  /v1/discovery:
+    get:
+      operationId: getDiscovery
+      summary: Where a client finds the rest of the deployment
+      description: |
+        Public and unauthenticated: a client reads it before logging in, so that the control-plane
+        URL is the only address a user has to know. `harnessUrl` is the harness base URL as a
+        client reaches it, set by the operator with SH_PUBLIC_HARNESS_URL. It is `null` when the
+        deployment advertises none; a 404 means a control plane that predates this route.
+      security: []
+      responses:
+        '200':
+          description: the advertised endpoints
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [harnessUrl]
+                properties:
+                  harnessUrl:
+                    type: [string, 'null']
+                    description: absolute http(s) URL, no trailing slash
   /v1/auth/device:
     post:
       operationId: startDeviceAuth

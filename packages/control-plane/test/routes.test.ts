@@ -21,6 +21,7 @@ describe('the route table', () => {
         'POST /internal/credentials',
         'GET /healthz',
         'GET /readyz',
+        'GET /v1/discovery',
       ].sort(),
     );
   });
@@ -41,13 +42,21 @@ describe('the route table', () => {
     expect(auth('POST', '/v1/auth/device')).toBe('none');
     expect(auth('POST', '/v1/auth/device/token')).toBe('none');
     expect(auth('POST', '/internal/credentials')).toBe('exchange');
+    // A client reads it before it has logged in; it carries no per-subject data.
+    expect(auth('GET', '/v1/discovery')).toBe('none');
   });
 
   it('requires an api-scoped token on every other /v1 route', () => {
     // A session token must not be able to rewrite credentials or create a second session, so
     // nothing under /v1 accepts scope `turn:write` (plan gap #7).
+    // The one named exception is discovery: public config, read before login, and GET-only.
+    const PUBLIC = new Set(['GET /v1/discovery']);
     const wrong = ROUTES.filter(
-      (r) => r.path.startsWith('/v1/') && !r.path.startsWith('/v1/auth/') && r.auth !== 'api',
+      (r) =>
+        r.path.startsWith('/v1/') &&
+        !r.path.startsWith('/v1/auth/') &&
+        !PUBLIC.has(`${r.method} ${r.path}`) &&
+        r.auth !== 'api',
     );
     expect(wrong.map((r) => r.path)).toEqual([]);
   });

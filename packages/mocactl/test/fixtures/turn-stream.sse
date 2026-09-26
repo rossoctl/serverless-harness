@@ -1,0 +1,22 @@
+: keepalive
+
+event: thinking
+data: {"type":"thinking","delta":"Let me look."}
+
+event: text
+data: {"type":"text","delta":"Checking the "}
+
+event: text
+data: {"type":"text","delta":"repo."}
+
+event: tool_use
+data: {"type":"tool_use","id":"toolu_1","name":"edit","args":{"path":"a.ts","edits":[{"oldText":"let x = 1;","newText":"const x = 1;"}]}}
+
+event: tool_result
+data: {"type":"tool_result","id":"toolu_1","isError":false,"preview":"Successfully replaced 1 block(s) in a.ts."}
+
+event: text
+data: {"type":"text","delta":"Done."}
+
+event: done
+data: {"type":"done","sessionId":"s1","stopReason":"end_turn","usage":{"input":120,"output":40,"cacheRead":0,"cacheWrite":0,"total":160}}
